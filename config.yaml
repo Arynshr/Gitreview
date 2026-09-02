@@ -4,26 +4,21 @@ llm:
   fallback_model: openai/gpt-oss-20b
   temperature: 0.2
   max_tokens: 1000
-
 retrieval:
   min_prs: 3
   max_prs: 10
   branch_prefix_match: true
-
 risk_classifier:
   enabled: true
   trivial_threshold: 0.15
   structural_weight: 0.3
-
 failure_handling:
   max_retries: 2
   retry_backoff_seconds: 2
-
 merge_preview:
   escalate_below_confidence: high
   blast_radius_depth: 2
   worktree_cleanup: true
-
 review:
   lint:
     enabled: true
@@ -31,7 +26,6 @@ review:
     enabled: true
     max_context_tokens: 6000
     hops: 2
-
 hooks:
   pre_push:
     block_on_risk: false
@@ -42,36 +36,26 @@ hooks:
     push_tag: false
   commit_msg:
     enabled: true
-    
 ignore_patterns:
   - "*.lock"
   - "poetry.lock"
-
 validation:
   enabled: true
   fail_closed: true
-
   fail_on:
     - critical
     - high
-
   block_secrets: true
   block_new_vulnerabilities: true
-
   deterministic:
     enabled: true
-
   ai:
     enabled: true
-    provider: ollama
-    model: qwen2.5-coder:3b-instruct-q4_K_M
-    base_url: http://127.0.0.1:11434
-
+    provider: llamacpp
+    model: qwen2.5-coder-3b-instruct-q4_k_m   # or a 7B Q4_K_M gguf if hardware allows
+    base_url: http://127.0.0.1:8080
+    api_key_env: VALIDATION_API_KEY
     timeout_seconds: 120
-
     max_context_tokens: 6000
     max_output_tokens: 1200
     max_file_chars: 12000
-
-    num_threads: 4
-    num_gpu: 0

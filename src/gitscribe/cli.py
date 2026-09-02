@@ -755,6 +755,5 @@ def merge_preview_cmd(
         "yourself once you've reviewed it."
     )
 
-
 if __name__ == "__main__":
     app()
