@@ -16,6 +16,7 @@ dependencies = [
     "numpy>=2.5.2",
     "pathlib>=1.0.1",
     "pathspec>=1.1.1",
+    "pip-audit>=2.10.1",
     "pytest>=9.1.1",
     "python-dotenv>=1.2.2",
     "ruff>=0.16.1",
@@ -24,7 +25,7 @@ dependencies = [
 ]
 
 [project.scripts]
-gitscribe = "gitscribe.cli:app"
+gitscribe = "gitscribe.validation.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
