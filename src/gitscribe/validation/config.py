@@ -15,15 +15,14 @@ DEFAULTS = {
     },
     "ai": {
         "enabled": True,
-        "provider": "ollama",
-        "model": "qwen2.5-coder:3b-instruct-q4_K_M",
-        "base_url": "http://127.0.0.1:11434",
+        "provider": "llamacpp",
+        "model": "qwen2.5-coder-3b-instruct-q4_k_m",
+        "base_url": "http://127.0.0.1:8080",
+        "api_key_env": "VALIDATION_API_KEY",
         "timeout_seconds": 120,
         "max_context_tokens": 6000,
         "max_output_tokens": 1200,
         "max_file_chars": 12000,
-        "num_threads": 4,
-        "num_gpu": 0,
     },
 }
 
@@ -57,14 +56,8 @@ def load_validation_config(path: str = "config.yaml") -> dict:
 
     cfg["ignore_patterns"] = raw.get("ignore_patterns", [])
 
-    if cfg["ai"]["provider"] != "ollama":
-        raise RuntimeError("validation.ai.provider must be 'ollama'")
-
-    if cfg["ai"]["num_gpu"] < 0:
-        raise RuntimeError("validation.ai.num_gpu must be >= 0")
-
-    if cfg["ai"]["num_threads"] <= 0:
-        raise RuntimeError("validation.ai.num_threads must be > 0")
+    if cfg["ai"]["provider"] != "llamacpp":
+        raise RuntimeError("validation.ai.provider must be 'llamacpp'")
 
     if cfg["ai"]["max_context_tokens"] <= 0:
         raise RuntimeError("validation.ai.max_context_tokens must be > 0")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 import urllib.error
 import urllib.parse
@@ -231,6 +232,7 @@ def _validate_finding(
     item: dict,
     index: int,
     allowed_files: set[str],
+    model_name: str,
 ) -> Finding:
     severity = item.get("severity")
     confidence = item.get("confidence")
@@ -305,7 +307,7 @@ def _validate_finding(
         message=_redact(description),
         evidence=_redact(evidence),
         remediation=_redact(recommendation),
-        sources=["qwen2.5-coder"],
+        sources=[model_name],
     )
 
 
@@ -367,22 +369,27 @@ def review_locally(
         "access. Do not invent files, lines, data flows, or vulnerabilities."
     )
 
+    # llama.cpp's `llama-server` speaks an OpenAI-compatible API on
+    # /v1/chat/completions rather than Ollama's /api/chat. Loopback-only
+    # enforcement below is unchanged and applies regardless of runtime.
     url = _loopback_url(
         str(
             cfg.get(
                 "base_url",
-                "http://127.0.0.1:11434",
+                "http://127.0.0.1:8080",
             )
         )
     )
 
+    model_name = str(
+        cfg.get(
+            "model",
+            "qwen2.5-coder-3b-instruct-q4_k_m",
+        )
+    )
+
     payload = {
-        "model": str(
-            cfg.get(
-                "model",
-                "qwen2.5-coder:3b-instruct-q4_K_M",
-            )
-        ),
+        "model": model_name,
         "messages": [
             {
                 "role": "system",
@@ -394,42 +401,43 @@ def review_locally(
             },
         ],
         "stream": False,
-        "keep_alive": 0,
-        "options": {
-            "temperature": 0,
-            "num_ctx": int(
-                cfg.get(
-                    "max_context_tokens",
-                    6000,
-                )
-            ),
-            "num_predict": int(
-                cfg.get(
-                    "max_output_tokens",
-                    1200,
-                )
-            ),
-            "num_thread": int(
-                cfg.get(
-                    "num_threads",
-                    4,
-                )
-            ),
-            "num_gpu": int(
-                cfg.get(
-                    "num_gpu",
-                    0,
-                )
-            ),
-        },
+        "temperature": 0,
+        "max_tokens": int(
+            cfg.get(
+                "max_output_tokens",
+                1200,
+            )
+        ),
     }
 
+    # Thread/GPU-layer counts are llama-server *launch* flags
+    # (--threads, --n-gpu-layers), not per-request fields, so they are
+    # intentionally not part of this payload. Context size is likewise
+    # fixed at server startup (-c) to match max_context_tokens.
+
+    headers = {
+        "Content-Type": "application/json",
+    }
+
+    # Separate credential from llm_client.py's API_KEY (cloud generation
+    # provider). This gates the local llama.cpp server only, and is
+    # optional: leave the env var unset/empty if llama-server was started
+    # without --api-key.
+    api_key_env = str(
+        cfg.get(
+            "api_key_env",
+            "VALIDATION_API_KEY",
+        )
+    )
+    api_key = os.environ.get(api_key_env)
+
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
     request = urllib.request.Request(
-        f"{url}/api/chat",
+        f"{url}/v1/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-        },
+        headers=headers,
         method="POST",
     )
 
@@ -456,10 +464,8 @@ def review_locally(
             f"local LLM review failed: {exc}"
         ) from exc
 
-    content = body.get(
-        "message",
-        {},
-    ).get("content")
+    choices = body.get("choices") or [{}]
+    content = choices[0].get("message", {}).get("content")
 
     if not isinstance(content, str) or not content.strip():
         raise AIReviewError(
@@ -488,6 +494,7 @@ def review_locally(
                 item,
                 index,
                 allowed_files,
+                model_name,
             )
         )
 
