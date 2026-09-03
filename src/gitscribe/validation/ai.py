@@ -233,8 +233,14 @@ def _extract_json(text: str) -> dict:
         if isinstance(value, dict):
             return value
 
+    cleaned = _redact(text.strip())
+    preview = cleaned[:300]
+    tail = cleaned[-500:]
+
     raise AIReviewError(
-        "local LLM returned malformed JSON"
+        "local LLM returned malformed JSON "
+        f"(likely truncated at max_output_tokens, or non-JSON output). "
+        f"raw output (first 300 chars): {preview!r}"
     )
 
 
@@ -415,9 +421,14 @@ def review_locally(
         "max_tokens": int(
             cfg.get(
                 "max_output_tokens",
-                1200,
+                20000,
             )
         ),
+        # llama.cpp's OpenAI-compatible endpoint grammar-constrains
+        # generation to valid JSON when this is set. Doesn't fix
+        # truncation if max_output_tokens is too small, but removes the
+        # "model wrapped it in prose/markdown" failure mode entirely.
+        "response_format": {"type": "json_object"},
     }
 
     # Thread/GPU-layer counts are llama-server *launch* flags

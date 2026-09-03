@@ -14,6 +14,7 @@ from gitscribe.validation.config import (
 from gitscribe.validation.hook import (
     install_pre_push_hook,
 )
+from gitscribe.validation.mode import VALID_MODES
 from gitscribe.validation.models import (
     AnalysisError,
     ValidationResult,
@@ -177,6 +178,9 @@ def _run_one(
     head: str,
     cfg: dict,
     force_ai: bool = False,
+    paths: list[str] | None = None,
+    force_mode: str | None = None,
+    sandboxed: bool = False,
 ) -> ValidationResult:
     context = resolve_change(
         base=base,
@@ -185,12 +189,15 @@ def _run_one(
             "ignore_patterns",
             [],
         ),
+        paths=paths,
     )
 
     return validate_change(
         context,
         cfg,
         force_ai=force_ai,
+        force_mode=force_mode,
+        sandboxed=sandboxed,
     )
 
 
@@ -244,6 +251,38 @@ def register_verify_command(
                 "is false in config.yaml."
             ),
         ),
+        path: list[str] = typer.Option(
+            None,
+            "--path",
+            help=(
+                "Restrict review to specific changed file(s) or glob(s) "
+                "instead of the full diff. Repeatable. Errors if nothing "
+                "in the diff matches."
+            ),
+        ),
+        mode: str = typer.Option(
+            None,
+            "--mode",
+            help=(
+                "Override review mode for this run: static, agentic, or "
+                "both. Typically paired with --path to review one file one "
+                "way. Without --mode, per-file mode comes from "
+                "validation.file_rules in config.yaml, defaulting to "
+                "'both' (pre-existing behavior) where unspecified."
+            ),
+        ),
+        sandboxed: bool = typer.Option(
+            False,
+            "--sandboxed",
+            help=(
+                "Required for the agentic pass to actually run. Routes it "
+                "through the isolated, loopback-only local-model sandbox "
+                "(same infra as `gitscribe review --sandboxed`). Any file "
+                "resolved to agentic/both mode is skipped (and recorded as "
+                "an error, failing the gate under fail_closed) if this "
+                "isn't passed."
+            ),
+        ),
         as_json: bool = typer.Option(
             False,
             "--json",
@@ -271,6 +310,23 @@ def register_verify_command(
                 f"pre-push hook: {message}"
             )
             return
+
+        if mode is not None and mode not in VALID_MODES:
+            typer.echo(
+                f"--mode must be one of {VALID_MODES}, got {mode!r}",
+                err=True,
+            )
+            raise typer.Exit(1)
+
+        if pre_push and (path or mode):
+            typer.echo(
+                "--path/--mode select files for a single ad-hoc review and "
+                "aren't supported with --pre-push (which reviews whatever "
+                "ref ranges git provides). Use validation.file_rules in "
+                "config.yaml to scope pre-push reviews instead.",
+                err=True,
+            )
+            raise typer.Exit(1)
 
         try:
             cfg = loader(
@@ -325,6 +381,9 @@ def register_verify_command(
                         range_head,
                         cfg,
                         force_ai=agentic,
+                        paths=path or None,
+                        force_mode=mode,
+                        sandboxed=sandboxed,
                     )
                 )
 

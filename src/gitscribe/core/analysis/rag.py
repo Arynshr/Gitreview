@@ -181,16 +181,28 @@ class _SandboxedChatModel:
         return types.SimpleNamespace(content=content)
 
 
-def _sandboxed_ai_config() -> dict:
+def _sandboxed_ai_config(cfg: dict) -> dict:
     """Reuses validation/config.py's already-battle-tested loader for the
-    local llama.cpp settings (base_url/model/api_key_env/timeouts) instead
-    of duplicating that config surface here. Imported lazily, and only on
+    local llama.cpp settings (base_url/model/api_key_env) instead of
+    duplicating that config surface here. Imported lazily, and only on
     the opt-in sandboxed path, so legacy agentic review never depends on
     `validation` being present or correctly configured.
+
+    `timeout_seconds` is overridable separately via
+    `review.agentic.sandboxed_timeout_seconds`: validation.ai's timeout
+    is tuned for a single-diff security review, but this path batches
+    several files into one prompt and can legitimately take much longer
+    on CPU inference — reusing the same budget for both is wrong.
     """
     from gitscribe.validation.config import load_validation_config
 
-    return load_validation_config("config.yaml")["ai"]
+    ai_cfg = dict(load_validation_config("config.yaml")["ai"])
+
+    override = cfg.get("review", {}).get("agentic", {}).get("sandboxed_timeout_seconds")
+    if override:
+        ai_cfg["timeout_seconds"] = override
+
+    return ai_cfg
 
 
 def _build_llm(cfg: dict, model_name: str, temperature: float, sandboxed: bool):
@@ -198,7 +210,7 @@ def _build_llm(cfg: dict, model_name: str, temperature: float, sandboxed: bool):
         # A single local model backs the sandboxed path — there is no
         # separate "fallback" local model to escalate to on bad_output,
         # unlike the cloud model_name/fallback_model pair below.
-        return _SandboxedChatModel(_sandboxed_ai_config())
+        return _SandboxedChatModel(_sandboxed_ai_config(cfg))
 
     from gitscribe.core.llm_client import build_chat_model
 
@@ -417,12 +429,37 @@ def _light_context_block(changed_symbol_ids: list[int], hops: int) -> str:
     return ", ".join(names[:15]) if names else "(none)"
 
 
+def _reserved_prompt_overhead(cfg: dict, sandboxed: bool) -> int:
+    """Static prompt template + format_instructions cost, plus the
+    response token budget for whichever path is active. Both were
+    previously unaccounted for in `_pack_into_batches`, which only
+    budgeted per-file diff size — so a batch could be "packed" within
+    max_context_tokens and still exceed the server's real context
+    window once the shared template and the model's own response were
+    added on top.
+    """
+    static_overhead = _estimate_tokens(_BATCH_REVIEW_PROMPT) + _estimate_tokens(
+        _BATCH_REVIEW_PARSER.get_format_instructions()
+    )
+
+    if sandboxed:
+        response_budget = int(_sandboxed_ai_config(cfg).get("max_output_tokens", 1200))
+    else:
+        response_budget = int(cfg.get("llm", {}).get("max_tokens", 1000))
+
+    return static_overhead + response_budget
+
+
 def _pack_into_batches(
     items: list[tuple[str, str, list[int]]], max_tokens: int
 ) -> list[list[tuple[str, str, list[int]]]]:
     """Greedy bin-packing by estimated token size. `items` is
     (file, diff_text, symbol_ids). Oversized single items go in their own
     batch and get truncated later by the per-file fallback, not dropped.
+
+    `max_tokens` here is expected to already be the *effective* budget
+    (max_context_tokens minus `_reserved_prompt_overhead`), not the raw
+    context window — callers reserve headroom before calling this.
     """
     batches: list[list[tuple[str, str, list[int]]]] = []
     current: list[tuple[str, str, list[int]]] = []
@@ -503,6 +540,11 @@ def run_batched_agentic_review(
     max_context_tokens = review_cfg.get("max_context_tokens", 6000)
     min_blast_radius = review_cfg.get("min_blast_radius_for_review", None)
 
+    reserved = _reserved_prompt_overhead(cfg, sandboxed)
+    # Floor so a small max_context_tokens doesn't produce a zero/negative
+    # budget and silently pack nothing.
+    effective_budget = max(max_context_tokens - reserved, 500)
+
     candidates: list[tuple[str, str, list[int]]] = []
     anchors: dict[str, int | None] = {}
     for file, diff_text in per_file_diffs.items():
@@ -516,9 +558,9 @@ def run_batched_agentic_review(
     if not candidates:
         return results, anchors, reviewed_files
 
-    batches = _pack_into_batches(candidates, max_context_tokens)
+    batches = _pack_into_batches(candidates, effective_budget)
     for batch in batches:
-        if len(batch) == 1 and _estimate_tokens(batch[0][1]) > max_context_tokens:
+        if len(batch) == 1 and _estimate_tokens(batch[0][1]) > effective_budget:
             # too big to batch with anything else and too big on its own —
             # fall back to the single-file path, which truncates as a
             # last resort instead of failing the whole batch.

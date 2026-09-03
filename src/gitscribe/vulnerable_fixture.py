@@ -6,9 +6,8 @@ Only exists to exercise gitscribe's deterministic (ruff) and agentic
 
 import os
 import pickle
-import subprocess
 import sqlite3
-
+import subprocess
 
 # --- hardcoded secret (should trip ruff S105/S106/S107 -> category "secrets") ---
 API_KEY = "sk-live-51NfakeButShapedRight1234567890abcdef"

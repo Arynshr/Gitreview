@@ -48,6 +48,15 @@ class AgenticReviewConfig(BaseModel):
     enabled: bool = True
     max_context_tokens: int = Field(gt=0, default=6000)
     hops: int = Field(gt=0, default=2)
+    sandboxed_timeout_seconds: int | None = Field(
+        default=None,
+        description="Overrides validation.ai.timeout_seconds specifically "
+        "for `gitscribe review --sandboxed`. That path batches several "
+        "files into one local-model call and can legitimately take much "
+        "longer than a single-diff validation.ai review, so reusing the "
+        "same budget for both is wrong. See "
+        "core/analysis/rag.py:_sandboxed_ai_config.",
+    )
     min_blast_radius_for_review: int | None = Field(
         default=None,
         description="Optional secondary gate: also escalate a file to the "

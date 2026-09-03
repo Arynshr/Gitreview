@@ -46,8 +46,22 @@ def _run_git(args: list[str], cwd: str | Path | None = None) -> str:
     return result.stdout
 
 
-def get_raw_diff(base: str = "origin/main", head: str = "HEAD") -> str:
-    return _run_git(["diff", f"{base}...{head}"])
+def get_raw_diff(
+    base: str = "origin/main",
+    head: str = "HEAD",
+    paths: list[str] | None = None,
+) -> str:
+    """`paths`, when given, scopes the diff to those files only (`git diff -- <paths>`).
+
+    Used to re-fetch a minimal diff after a file selection has been resolved,
+    so downstream stages (esp. the AI review prompt) aren't paying token cost
+    for files outside the selected scope.
+    """
+    args = ["diff", f"{base}...{head}"]
+    if paths:
+        args.append("--")
+        args.extend(paths)
+    return _run_git(args)
 
 
 def get_commit_messages(base: str = "origin/main", head: str = "HEAD") -> list[str]:

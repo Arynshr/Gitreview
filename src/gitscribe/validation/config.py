@@ -4,12 +4,18 @@ from pathlib import Path
 
 import yaml
 
+from gitscribe.validation.mode import VALID_MODES
+
 DEFAULTS = {
     "enabled": True,
     "fail_closed": True,
     "fail_on": ["critical", "high"],
     "block_secrets": True,
     "block_new_vulnerabilities": True,
+    # Ordered path->mode assignments for batching/pre-defining review scope.
+    # First match wins; files matching nothing use the existing "both" behavior.
+    # e.g. [{"path": "src/gitscribe/validation/**", "mode": "agentic"}]
+    "file_rules": [],
     "deterministic": {
         "enabled": True,
     },
@@ -19,10 +25,10 @@ DEFAULTS = {
         "model": "qwen2.5-coder-3b-instruct-q4_k_m",
         "base_url": "http://127.0.0.1:8080",
         "api_key_env": "VALIDATION_API_KEY",
-        "timeout_seconds": 120,
-        "max_context_tokens": 6000,
-        "max_output_tokens": 1200,
-        "max_file_chars": 12000,
+        "timeout_seconds": 300,
+        "max_context_tokens": 20000,
+        "max_output_tokens": 2000,
+        "max_file_chars": 2000,
     },
 }
 
@@ -64,5 +70,19 @@ def load_validation_config(path: str = "config.yaml") -> dict:
 
     if cfg["ai"]["timeout_seconds"] <= 0:
         raise RuntimeError("validation.ai.timeout_seconds must be > 0")
+
+    if not isinstance(cfg["file_rules"], list):
+        raise RuntimeError("validation.file_rules must be a list")
+
+    for rule in cfg["file_rules"]:
+        if not isinstance(rule, dict) or "path" not in rule or "mode" not in rule:
+            raise RuntimeError(
+                "validation.file_rules entries must be {path: <glob>, mode: <static|agentic|both>}"
+            )
+
+        if rule["mode"] not in VALID_MODES:
+            raise RuntimeError(
+                f"validation.file_rules mode must be one of {VALID_MODES}, got {rule['mode']!r}"
+            )
 
     return cfg
