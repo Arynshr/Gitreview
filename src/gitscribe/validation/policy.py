@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from gitscribe.validation.models import Finding
 
-
 _SEVERITY_RANK = {
     "info": 0,
     "low": 1,

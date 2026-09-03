@@ -422,15 +422,19 @@ def review_cmd(
     as_json: bool = typer.Option(False, "--json", help="Scriptable output"),
     base: str = typer.Option("origin/main", help="Diff base for the agentic pass"),
     head: str = typer.Option("HEAD", help="Diff head for the agentic pass"),
+    sandboxed: bool = typer.Option(
+        False,
+        "--sandboxed",
+        help="Route the agentic pass through the local llama.cpp server "
+        "(gitscribe.validation's config) instead of the cloud BYOK provider.",
+    ),
 ):
     """Run lint + agentic review, write review_findings, print summary."""
     config = load_config()
-
     lint_count = 0
     if config.get("review", {}).get("lint", {}).get("enabled", True):
         findings = linter_mod.run_ruff(".")
         lint_count = linter_mod.write_lint_findings(findings)
-
     agentic_count = 0
     if not lint_only and config.get("review", {}).get("agentic", {}).get("enabled", True):
         try:
@@ -438,7 +442,6 @@ def review_cmd(
         except GitCommandError as e:
             console.warn(f"skipping agentic review, couldn't get diff: {e}")
             raw_diff = ""
-
         if raw_diff.strip():
             # Gate + batch: files with no error-severity lint findings and
             # low blast radius are skipped entirely (lint's bandit-style
@@ -447,23 +450,24 @@ def review_cmd(
             # fit the token budget instead of one call per file.
             per_file_diffs = split_diff_by_file(raw_diff)
             try:
-                results, anchors, reviewed_files = run_batched_agentic_review(per_file_diffs, config)
+                results, anchors, reviewed_files = run_batched_agentic_review(
+                    per_file_diffs, config, sandboxed=sandboxed
+                )
                 agentic_count = write_agentic_findings_by_file(results, anchors)
                 skipped = len(per_file_diffs) - len(reviewed_files)
                 console.info(
-                    f"agentic review: {len(reviewed_files)} file(s) sent to LLM, "
+                    f"agentic review: {len(reviewed_files)} file(s) sent to "
+                    f"{'the local model' if sandboxed else 'the LLM'}, "
                     f"{skipped} skipped by gate, {agentic_count} finding(s)"
                 )
             except Exception as e:
                 console.warn(f"agentic review failed: {e}")
         else:
             console.info("empty diff, skipping agentic review (index staleness is a separate condition)")
-
     if as_json:
         typer.echo(json.dumps({"lint_findings": lint_count, "agentic_findings": agentic_count}))
     else:
         console.success(f"review: {lint_count} lint finding(s), {agentic_count} agentic finding(s)")
-
 
 @app.command()
 def query(

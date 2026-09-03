@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import time
 
+from gitscribe.validation.aggregator import aggregate
 from gitscribe.validation.ai import (
     AIReviewError,
     review_locally,
 )
-from gitscribe.validation.aggregator import aggregate
 from gitscribe.validation.deterministic import (
     DeterministicAnalysisError,
     run_deterministic,

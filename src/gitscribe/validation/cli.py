@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import time
-from typing import Callable
+from collections.abc import Callable
 
 import typer
 
@@ -16,7 +16,6 @@ from gitscribe.validation.hook import (
 )
 from gitscribe.validation.models import (
     AnalysisError,
-    ChangeContext,
     ValidationResult,
 )
 from gitscribe.validation.orchestrator import (

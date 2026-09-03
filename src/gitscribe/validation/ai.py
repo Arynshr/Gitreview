@@ -11,7 +11,6 @@ from pathlib import Path
 
 from gitscribe.validation.models import ChangeContext, Finding
 
-
 _REVIEW_SYSTEM = """You are GitScribe's local security reviewer.
 
 Review the supplied Git change for security vulnerabilities and contextual

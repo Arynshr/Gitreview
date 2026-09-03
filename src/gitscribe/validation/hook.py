@@ -4,7 +4,6 @@ import os
 import stat
 from pathlib import Path
 
-
 HOOK_TEXT = """#!/bin/sh
 set -eu
 command -v gitscribe >/dev/null 2>&1 || exit 1
