@@ -24,8 +24,9 @@ review:
     enabled: true
   agentic:
     enabled: true
-    max_context_tokens: 6000
+    max_context_tokens: 20000
     hops: 2
+    sandboxed_timeout_seconds: 300
 hooks:
   pre_push:
     block_on_risk: false
