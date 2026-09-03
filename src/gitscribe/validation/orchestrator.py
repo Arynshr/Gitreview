@@ -22,6 +22,7 @@ from gitscribe.validation.policy import evaluate
 def validate_change(
     context: ChangeContext,
     cfg: dict,
+    force_ai: bool = False,
 ) -> ValidationResult:
     timings: dict[str, float] = {}
     findings = []
@@ -60,13 +61,15 @@ def validate_change(
 
     started = time.perf_counter()
 
-    if cfg.get(
+    run_ai = force_ai or cfg.get(
         "ai",
         {},
     ).get(
         "enabled",
         True,
-    ):
+    )
+
+    if run_ai:
         try:
             findings.extend(
                 review_locally(
@@ -100,6 +103,7 @@ def validate_change(
             findings,
             cfg,
             errors=bool(errors),
+            diff=context.diff,
         )
         else "FAIL"
     )

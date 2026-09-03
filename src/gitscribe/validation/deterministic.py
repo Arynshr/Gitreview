@@ -133,7 +133,13 @@ def _path_traversal_findings(
                         sources=["gitscribe-path-check"],
                     )
                 )
-                break
+                # Deliberately no `break` here: the previous version
+                # stopped scanning a file after its first tainted sink,
+                # silently missing every other instance in the same
+                # file. Each sink call site is a distinct location and
+                # is reported independently; aggregator.py already
+                # dedupes by (file, line, category) if the same line
+                # somehow matches twice.
 
     return findings
 
@@ -176,6 +182,17 @@ def run_ruff(
 
     findings: list[Finding] = []
 
+    # Well-known bandit-derived codes for injection/unsafe-deserialization
+    # classes that warrant escalation above the flat "high" every other
+    # S-rule gets. Deliberately a short, high-confidence list rather than
+    # an attempt to re-grade the entire bandit rule set.
+    critical_codes = {
+        "S608",  # SQL injection via string-built query
+        "S602",  # subprocess call with shell=True
+        "S301",  # unsafe pickle deserialization
+        "S302",  # unsafe marshal deserialization
+    }
+
     for item in raw:
         code = str(item.get("code") or "RUFF")
 
@@ -183,10 +200,16 @@ def run_ruff(
 
         if code in {"S105", "S106", "S107"}:
             category = "secrets"
+            severity = "high"
+        elif code in critical_codes:
+            category = "security"
+            severity = "critical"
         elif security:
             category = "security"
+            severity = "high"
         else:
             category = "validation"
+            severity = "medium"
 
         findings.append(
             Finding(
@@ -198,7 +221,7 @@ def run_ruff(
                 source="deterministic",
                 category=category,
                 rule_id=code,
-                severity="high" if security else "medium",
+                severity=severity,
                 confidence="high",
                 file=item.get("filename"),
                 line=item.get("location", {}).get("row"),

@@ -177,6 +177,7 @@ def _run_one(
     base: str,
     head: str,
     cfg: dict,
+    force_ai: bool = False,
 ) -> ValidationResult:
     context = resolve_change(
         base=base,
@@ -190,6 +191,7 @@ def _run_one(
     return validate_change(
         context,
         cfg,
+        force_ai=force_ai,
     )
 
 
@@ -232,6 +234,15 @@ def register_verify_command(
             help=(
                 "Install or safely upgrade "
                 "the GitScribe pre-push hook."
+            ),
+        ),
+        agentic: bool = typer.Option(
+            False,
+            "--agentic",
+            help=(
+                "Force the local AI review pass "
+                "to run even if validation.ai.enabled "
+                "is false in config.yaml."
             ),
         ),
         as_json: bool = typer.Option(
@@ -314,6 +325,7 @@ def register_verify_command(
                         range_base,
                         range_head,
                         cfg,
+                        force_ai=agentic,
                     )
                 )
 
