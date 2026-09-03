@@ -14,6 +14,7 @@ from dotenv import find_dotenv, load_dotenv
 from pydantic import ValidationError
 
 from gitscribe import console
+from gitscribe.config_locator import find_config_path
 from gitscribe.core import hooks as hook_utils, memory
 from gitscribe.core.analysis import linter as linter_mod
 from gitscribe.core.analysis.diff_symbols import split_diff_by_file
@@ -52,13 +53,18 @@ class Style(StrEnum):
     detailed = "detailed"
 
 
-def load_config(path: str = "config.yaml") -> dict:
+def load_config(path: str | None = None) -> dict:
     """Load and validate config.yaml, returning a plain dict.
 
-    Fails fast with a clear message on bad config. Returns a plain dict
+    `path` defaults to `config_locator.find_config_path()` — resolved fresh
+    on every call (not baked into the signature) so it always reflects the
+    current working directory, not whatever directory the process started
+    in. Fails fast with a clear message on bad config. Returns a plain dict
     (already the result of `GitScribeConfig.as_dict()`) — callers should
     use the return value as-is, not call `.as_dict()` on it again.
     """
+    path = path or find_config_path()
+
     try:
         with open(path) as f:
             raw = yaml.safe_load(f) or {}

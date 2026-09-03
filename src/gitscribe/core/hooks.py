@@ -16,7 +16,7 @@ COMMIT_RE = re.compile(
     r"^(?P<type>feat|fix|build|chore|ci|docs|style|refactor|perf|test)"
     r"(?:\((?P<scope>[a-z0-9_-]+)\))?"
     r"(?P<breaking>!)?: "
-    r"(?P<desc>[a-z].{0,70}[^.\n])$"
+    r"(?P<desc>[a-z].{0,98})$"
 )
 BREAKING_FOOTER_RE = re.compile(r"^BREAKING CHANGE: .+", re.MULTILINE)
 

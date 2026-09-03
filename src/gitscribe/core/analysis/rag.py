@@ -194,9 +194,10 @@ def _sandboxed_ai_config(cfg: dict) -> dict:
     several files into one prompt and can legitimately take much longer
     on CPU inference — reusing the same budget for both is wrong.
     """
+    from gitscribe.config_locator import find_config_path
     from gitscribe.validation.config import load_validation_config
 
-    ai_cfg = dict(load_validation_config("config.yaml")["ai"])
+    ai_cfg = dict(load_validation_config(find_config_path())["ai"])
 
     override = cfg.get("review", {}).get("agentic", {}).get("sandboxed_timeout_seconds")
     if override:

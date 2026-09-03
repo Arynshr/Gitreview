@@ -4,6 +4,7 @@ from pathlib import Path
 
 import yaml
 
+from gitscribe.config_locator import find_config_path
 from gitscribe.validation.mode import VALID_MODES
 
 DEFAULTS = {
@@ -25,10 +26,10 @@ DEFAULTS = {
         "model": "qwen2.5-coder-3b-instruct-q4_k_m",
         "base_url": "http://127.0.0.1:8080",
         "api_key_env": "VALIDATION_API_KEY",
-        "timeout_seconds": 300,
-        "max_context_tokens": 20000,
-        "max_output_tokens": 2000,
-        "max_file_chars": 2000,
+        "timeout_seconds": 120,
+        "max_context_tokens": 6000,
+        "max_output_tokens": 1200,
+        "max_file_chars": 12000,
     },
 }
 
@@ -45,7 +46,8 @@ def _merge(base: dict, override: dict) -> dict:
     return result
 
 
-def load_validation_config(path: str = "config.yaml") -> dict:
+def load_validation_config(path: str | None = None) -> dict:
+    path = path or find_config_path()
     config_path = Path(path)
 
     if not config_path.is_file():

@@ -8,6 +8,7 @@ from collections.abc import Callable
 import typer
 
 from gitscribe.cli import app
+from gitscribe.config_locator import find_config_path
 from gitscribe.validation.config import (
     load_validation_config,
 )
@@ -330,7 +331,7 @@ def register_verify_command(
 
         try:
             cfg = loader(
-                "config.yaml"
+                find_config_path()
             )
         except Exception as exc:
             typer.echo(
