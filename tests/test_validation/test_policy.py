@@ -93,3 +93,65 @@ def test_analysis_error_fails_closed() -> None:
         },
         errors=True,
     )
+def test_new_high_finding_fails_when_blocking_new_vulnerabilities():
+    diff = """\
+--- a/fixture.py
++++ b/fixture.py
+@@ -1,2 +1,3 @@
+ old
++new
+ old2
+"""
+    finding = make_finding()
+    finding.line = 2
+
+    assert not evaluate(
+        [finding],
+        {
+            "fail_on": ["critical", "high"],
+            "block_secrets": True,
+            "fail_closed": True,
+            "block_new_vulnerabilities": True,
+        },
+        diff=diff,
+    )
+
+
+def test_pre_existing_high_finding_does_not_fail():
+    diff = """\
+--- a/fixture.py
++++ b/fixture.py
+@@ -1,2 +1,3 @@
+ old
++new
+ old2
+"""
+    finding = make_finding()
+    finding.line = 1
+
+    assert evaluate(
+        [finding],
+        {
+            "fail_on": ["critical", "high"],
+            "block_secrets": True,
+            "fail_closed": True,
+            "block_new_vulnerabilities": True,
+        },
+        diff=diff,
+    )
+
+
+def test_finding_without_line_is_treated_as_new():
+    finding = make_finding()
+    finding.line = None
+
+    assert not evaluate(
+        [finding],
+        {
+            "fail_on": ["critical", "high"],
+            "block_secrets": True,
+            "fail_closed": True,
+            "block_new_vulnerabilities": True
+        },
+        diff="",
+    )
