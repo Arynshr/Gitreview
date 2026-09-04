@@ -50,6 +50,7 @@ class AgenticReviewConfig(BaseModel):
     hops: int = Field(gt=0, default=2)
     sandboxed_timeout_seconds: int | None = Field(
         default=None,
+        gt=0,
         description="Overrides validation.ai.timeout_seconds specifically "
         "for `gitscribe review --sandboxed`. That path batches several "
         "files into one local-model call and can legitimately take much "
