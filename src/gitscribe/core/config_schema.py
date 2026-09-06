@@ -123,6 +123,13 @@ class FileRule(BaseModel):
 
 class DeterministicValidationConfig(BaseModel):
     enabled: bool = True
+    timeout_seconds: float = Field(
+        gt=0,
+        default=60,
+        description="Wall-clock limit per scanner subprocess (ruff, "
+        "pip-audit). Previously unbounded - a hung scanner could block "
+        "the push/merge indefinitely.",
+    )
 
 
 class AIReviewValidationConfig(BaseModel):
