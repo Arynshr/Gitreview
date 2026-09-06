@@ -47,6 +47,15 @@ def validate_change(
     fails the gate under the default `fail_closed: true` (safe-by-default,
     per the advisory/gate rule: missing/blocked advisory signal -> don't
     proceed). Deterministic-only files are unaffected either way.
+
+    `force_ai` (CLI `--force-agentic`) and `cfg["ai"]["force"]`
+    (`validation.ai.force` in config.yaml, for a permanent/CI setting) are
+    equivalent: either one runs the AI pass even when `validation.ai.enabled`
+    is false. Neither of them - nor anything else in this function - makes
+    the AI pass conditional on what the deterministic pass found. The two
+    paths always run independently when their respective files are in
+    scope; a deterministic finding never causes the AI pass to be skipped,
+    and vice versa (see code_review.md's Finding Aggregation invariants).
     """
     timings: dict[str, float] = {}
     findings = []
@@ -95,7 +104,7 @@ def validate_change(
     started = time.perf_counter()
 
     run_ai = (
-        force_ai or cfg.get("ai", {}).get("enabled", True)
+        force_ai or cfg.get("ai", {}).get("enabled", True) or cfg.get("ai", {}).get("force", False)
     ) and bool(ai_files)
 
     if run_ai and not sandboxed:

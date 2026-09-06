@@ -4,6 +4,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 import typer
 
@@ -13,6 +14,7 @@ from gitscribe.validation.config import (
     load_validation_config,
 )
 from gitscribe.validation.hook import (
+    install_pre_merge_hook,
     install_pre_push_hook,
 )
 from gitscribe.validation.mode import VALID_MODES
@@ -87,6 +89,20 @@ def _pre_push_ranges() -> list[tuple[str, str]]:
         )
 
     return ranges
+
+
+def _pre_merge_range() -> tuple[str, str] | None:
+    """Mirrors `merge_check_cmd`'s base/head pair (core `gitscribe
+    merge-check`) so the new validation gate reviews exactly the same
+    change a merge would introduce. Returns None when no merge is in
+    progress (git provides no stdin protocol for pre-merge-commit the way
+    it does for pre-push, so this is a plain filesystem check, not review
+    logic - the actual scanning/AI/policy work still happens downstream).
+    """
+    if not Path(".git/MERGE_HEAD").is_file():
+        return None
+
+    return ("HEAD", "MERGE_HEAD")
 
 
 def _report(
@@ -235,22 +251,45 @@ def register_verify_command(
                 "ref updates from stdin."
             ),
         ),
+        pre_merge: bool = typer.Option(
+            False,
+            "--pre-merge",
+            help=(
+                "Resolve the change from .git/MERGE_HEAD for the "
+                "pre-merge-commit hook (base=HEAD, head=MERGE_HEAD). "
+                "No-op (exit 0) if no merge is in progress."
+            ),
+        ),
         install_hook: bool = typer.Option(
             False,
             "--install-hook",
             help=(
-                "Install or safely upgrade "
-                "the GitScribe pre-push hook."
+                "Install or safely upgrade the GitScribe pre-push and "
+                "pre-merge-commit hooks."
+            ),
+        ),
+        force_agentic: bool = typer.Option(
+            False,
+            "--force-agentic",
+            help=(
+                "Force the sandboxed AI review pass to run even if "
+                "validation.ai.enabled is false in config.yaml. This only "
+                "overrides that enabled gate - it is never a dependency on "
+                "the deterministic/static path's results, which always "
+                "run independently regardless of this flag. Implies "
+                "--sandboxed: gitscribe verify's AI reviewer only ever "
+                "runs inside the local, loopback-only sandbox - there is "
+                "no cloud/agentic mode here, unlike `gitscribe review "
+                "--sandboxed`. For a permanent/CI setting instead of "
+                "remembering this flag every time, set "
+                "validation.ai.force: true in config.yaml."
             ),
         ),
         agentic: bool = typer.Option(
             False,
             "--agentic",
-            help=(
-                "Force the local AI review pass "
-                "to run even if validation.ai.enabled "
-                "is false in config.yaml."
-            ),
+            hidden=True,
+            help="Deprecated alias for --force-agentic.",
         ),
         path: list[str] = typer.Option(
             None,
@@ -295,9 +334,8 @@ def register_verify_command(
     ) -> None:
         if install_hook:
             try:
-                message = (
-                    install_pre_push_hook()
-                )
+                push_message = install_pre_push_hook()
+                merge_message = install_pre_merge_hook()
             except RuntimeError as exc:
                 typer.echo(
                     str(exc),
@@ -308,9 +346,20 @@ def register_verify_command(
                 ) from exc
 
             typer.echo(
-                f"pre-push hook: {message}"
+                f"pre-push hook: {push_message}"
+            )
+            typer.echo(
+                f"pre-merge-commit hook: {merge_message}"
             )
             return
+
+        if agentic and not force_agentic:
+            typer.echo(
+                "note: --agentic is deprecated, use --force-agentic instead "
+                "(same behavior).",
+                err=True,
+            )
+            force_agentic = True
 
         if mode is not None and mode not in VALID_MODES:
             typer.echo(
@@ -319,15 +368,35 @@ def register_verify_command(
             )
             raise typer.Exit(1)
 
-        if pre_push and (path or mode):
+        if pre_push and pre_merge:
             typer.echo(
-                "--path/--mode select files for a single ad-hoc review and "
-                "aren't supported with --pre-push (which reviews whatever "
-                "ref ranges git provides). Use validation.file_rules in "
-                "config.yaml to scope pre-push reviews instead.",
+                "--pre-push and --pre-merge are mutually exclusive.",
                 err=True,
             )
             raise typer.Exit(1)
+
+        if (pre_push or pre_merge) and (path or mode):
+            typer.echo(
+                "--path/--mode select files for a single ad-hoc review and "
+                "aren't supported with --pre-push/--pre-merge (which "
+                "review whatever ref range the hook provides). Use "
+                "validation.file_rules in config.yaml to scope "
+                "hook-triggered reviews instead.",
+                err=True,
+            )
+            raise typer.Exit(1)
+
+        if force_agentic and not sandboxed:
+            # See --force-agentic's help text: for `verify` these two are
+            # not independent knobs the way `gitscribe review`'s cloud vs.
+            # local-sandboxed split is. Silently leaving sandboxed False
+            # here just reproduces the "agentic requested but skipped as
+            # an error under fail_closed" failure mode.
+            sandboxed = True
+            typer.echo(
+                "note: --force-agentic implies --sandboxed for `gitscribe "
+                "verify` (see --force-agentic --help)."
+            )
 
         try:
             cfg = loader(
@@ -359,16 +428,19 @@ def register_verify_command(
         ] = []
 
         try:
-            ranges = (
-                _pre_push_ranges()
-                if pre_push
-                else [(base, head)]
-            )
+            if pre_push:
+                ranges = _pre_push_ranges()
+            elif pre_merge:
+                merge_range = _pre_merge_range()
+                ranges = [merge_range] if merge_range else []
+            else:
+                ranges = [(base, head)]
 
             if not ranges:
                 typer.echo(
-                    "no push updates "
-                    "require validation"
+                    "no merge in progress"
+                    if pre_merge
+                    else "no push updates require validation"
                 )
                 return
 
@@ -381,7 +453,7 @@ def register_verify_command(
                         range_base,
                         range_head,
                         cfg,
-                        force_ai=agentic,
+                        force_ai=force_agentic,
                         paths=path or None,
                         force_mode=mode,
                         sandboxed=sandboxed,

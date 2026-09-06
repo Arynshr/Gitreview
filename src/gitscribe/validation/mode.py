@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import pathspec
 
-VALID_MODES = ("static", "agentic", "both")
-DEFAULT_MODE = "both"  # preserves pre-existing behavior when nothing is specified
+# VALID_MODES/DEFAULT_MODE live in core/config_schema.py (the single schema
+# source for the whole app) and are re-exported here so existing importers
+# of gitscribe.validation.mode don't need to change.
+from gitscribe.core.config_schema import DEFAULT_MODE, VALID_MODES
+
+__all__ = ["VALID_MODES", "DEFAULT_MODE", "resolve_file_modes", "split_by_mode"]
 
 
 def resolve_file_modes(

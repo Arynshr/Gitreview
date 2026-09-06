@@ -3,50 +3,38 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
+from pydantic import ValidationError
 
 from gitscribe.config_locator import find_config_path
-from gitscribe.validation.mode import VALID_MODES
+from gitscribe.core.config_schema import DEFAULT_MODE, VALID_MODES, ValidationConfig
 
-DEFAULTS = {
-    "enabled": True,
-    "fail_closed": True,
-    "fail_on": ["critical", "high"],
-    "block_secrets": True,
-    "block_new_vulnerabilities": True,
-    # Ordered path->mode assignments for batching/pre-defining review scope.
-    # First match wins; files matching nothing use the existing "both" behavior.
-    # e.g. [{"path": "src/gitscribe/validation/**", "mode": "agentic"}]
-    "file_rules": [],
-    "deterministic": {
-        "enabled": True,
-    },
-    "ai": {
-        "enabled": True,
-        "provider": "llamacpp",
-        "model": "qwen2.5-coder-3b-instruct-q4_k_m",
-        "base_url": "http://127.0.0.1:8080",
-        "api_key_env": "VALIDATION_API_KEY",
-        "timeout_seconds": 120,
-        "max_context_tokens": 6000,
-        "max_output_tokens": 1200,
-        "max_file_chars": 12000,
-    },
-}
-
-
-def _merge(base: dict, override: dict) -> dict:
-    result = dict(base)
-
-    for key, value in override.items():
-        if isinstance(value, dict) and isinstance(result.get(key), dict):
-            result[key] = _merge(result[key], value)
-        else:
-            result[key] = value
-
-    return result
+# Re-exported for backward compatibility: other modules (e.g.
+# validation.mode) historically imported these constants from here. The
+# values themselves now live in core/config_schema.py, alongside the rest
+# of the app's config schema - this is the single place that defines them.
+__all__ = ["DEFAULT_MODE", "VALID_MODES", "load_validation_config"]
 
 
 def load_validation_config(path: str | None = None) -> dict:
+    """Loads and validates the `validation:` section of config.yaml.
+
+    Schema, defaults, and field constraints all live in exactly one place:
+    `core.config_schema.ValidationConfig`, part of the same GitScribeConfig
+    tree that `core.cli.load_config` validates as a whole. This function is
+    a thin adapter over that model - parse the raw section, validate it,
+    hand back a plain dict - so existing consumers (orchestrator.py, ai.py,
+    deterministic.py, policy.py, mode.py) are unaffected: they already just
+    do cfg.get(...) / cfg["ai"] / cfg["file_rules"] on the result.
+
+    Previously this module carried its own hand-rolled DEFAULTS dict, its
+    own recursive _merge(), and its own ad-hoc validation checks (provider
+    must be "llamacpp", timeouts > 0, file_rules shape, etc.) - a second,
+    independent config schema for the exact same config.yaml file that
+    core.config_schema.GitScribeConfig already validates. That duplication
+    is what let the two drift apart. Pydantic's own merging (explicit
+    fields override model defaults) and validators now do all of that in
+    one place.
+    """
     path = path or find_config_path()
     config_path = Path(path)
 
@@ -54,37 +42,17 @@ def load_validation_config(path: str | None = None) -> dict:
         raise RuntimeError(f"config file not found: {path}")
 
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    section = raw.get("validation", {})
 
-    validation = raw.get("validation", {})
-
-    if not isinstance(validation, dict):
+    if not isinstance(section, dict):
         raise RuntimeError("validation configuration must be a mapping")
 
-    cfg = _merge(DEFAULTS, validation)
+    try:
+        validated = ValidationConfig(**section)
+    except ValidationError as exc:
+        raise RuntimeError(f"validation configuration failed: {exc}") from exc
 
+    cfg = validated.model_dump()
     cfg["ignore_patterns"] = raw.get("ignore_patterns", [])
-
-    if cfg["ai"]["provider"] != "llamacpp":
-        raise RuntimeError("validation.ai.provider must be 'llamacpp'")
-
-    if cfg["ai"]["max_context_tokens"] <= 0:
-        raise RuntimeError("validation.ai.max_context_tokens must be > 0")
-
-    if cfg["ai"]["timeout_seconds"] <= 0:
-        raise RuntimeError("validation.ai.timeout_seconds must be > 0")
-
-    if not isinstance(cfg["file_rules"], list):
-        raise RuntimeError("validation.file_rules must be a list")
-
-    for rule in cfg["file_rules"]:
-        if not isinstance(rule, dict) or "path" not in rule or "mode" not in rule:
-            raise RuntimeError(
-                "validation.file_rules entries must be {path: <glob>, mode: <static|agentic|both>}"
-            )
-
-        if rule["mode"] not in VALID_MODES:
-            raise RuntimeError(
-                f"validation.file_rules mode must be one of {VALID_MODES}, got {rule['mode']!r}"
-            )
 
     return cfg

@@ -23,12 +23,18 @@ not re-report a finding already listed under DETERMINISTIC FINDINGS for
 the same file and line - only add one there if it is a materially
 different issue at that location.
 
+Keep every finding brief - only the important information, in the same
+terse style as a static analyzer finding. Do not write an essay per
+finding.
+
 For every finding:
 - identify the affected location using a line number that actually
   appears in the supplied CHANGED CODE or DIFF; never estimate or guess
   a line number
-- explain the relevant data/control flow
-- provide repository evidence drawn from the supplied code
+- description: one sentence naming the vulnerability and where the
+  tainted data comes from
+- evidence: one short, concrete reference to the supplied code (e.g. the
+  source and sink involved) - not a restatement of the description
 - assess severity: critical, high, medium, low, or info
 - assess confidence:
   - high: the tainted source and the sink are both visible in the
@@ -36,8 +42,7 @@ For every finding:
   - medium: the pattern is plausible but part of the data/control flow
     is outside the supplied context
   - low: speculative, based on pattern-matching alone
-- explain impact
-- provide remediation guidance
+- recommendation: one short, actionable fix
 
 Do not report a vulnerability without supporting repository evidence.
 Report uncertainty by using a lower confidence value, never by omitting
@@ -55,7 +60,6 @@ Return JSON only:
       "line": 0,
       "description": "",
       "evidence": "",
-      "reasoning_summary": "",
       "recommendation": ""
     }
   ]
