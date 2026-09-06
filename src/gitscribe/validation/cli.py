@@ -10,12 +10,15 @@ import typer
 
 from gitscribe.cli import app
 from gitscribe.config_locator import find_config_path
+from gitscribe.core.hooks import get_cached_validation, store_cached_validation
 from gitscribe.validation.config import (
     load_validation_config,
 )
 from gitscribe.validation.hook import (
     install_pre_merge_hook,
     install_pre_push_hook,
+    uninstall_pre_merge_hook,
+    uninstall_pre_push_hook,
 )
 from gitscribe.validation.mode import VALID_MODES
 from gitscribe.validation.models import (
@@ -199,6 +202,20 @@ def _run_one(
     force_mode: str | None = None,
     sandboxed: bool = False,
 ) -> ValidationResult:
+    # Caching only applies to whole-change reviews (no --path/--mode
+    # narrowing): a partial ad-hoc review isn't something a hook would
+    # ever re-run identically, and caching it under the same key as a
+    # full review of the same range would risk returning the wrong
+    # scope's result. get_cached_validation/store_cached_validation are
+    # themselves gated on a clean working tree (see core/hooks.py) since
+    # the deterministic/AI passes read files off disk, not git blobs.
+    cacheable = paths is None and force_mode is None
+
+    if cacheable:
+        cached = get_cached_validation(cfg, base, head, sandboxed, force_ai)
+        if cached is not None:
+            return ValidationResult.model_validate(cached)
+
     context = resolve_change(
         base=base,
         head=head,
@@ -209,7 +226,7 @@ def _run_one(
         paths=paths,
     )
 
-    return validate_change(
+    result = validate_change(
         context,
         cfg,
         force_ai=force_ai,
@@ -217,11 +234,23 @@ def _run_one(
         sandboxed=sandboxed,
     )
 
+    # Only cache a genuinely completed scan. A result with `errors` (e.g.
+    # "required scanner not found", an LLM timeout) reflects an
+    # *environment* problem, not a property of this diff - it can resolve
+    # on the very next invocation with nothing about the code changing.
+    # Caching it would make a transient failure (like ruff not being
+    # installed yet) stick around and get silently replayed as this
+    # diff's permanent status even after the environment is fixed.
+    if cacheable and not result.errors:
+        store_cached_validation(cfg, base, head, result.model_dump(), sandboxed, force_ai)
+
+    return result
+
 
 def register_verify_command(
     command_app: typer.Typer,
     config_loader: Callable[
-        [str],
+        ...,
         dict,
     ]
     | None = None,
@@ -266,6 +295,17 @@ def register_verify_command(
             help=(
                 "Install or safely upgrade the GitScribe pre-push and "
                 "pre-merge-commit hooks."
+            ),
+        ),
+        uninstall_hook: bool = typer.Option(
+            False,
+            "--uninstall-hook",
+            help=(
+                "Remove only the GitScribe-authored lines from the "
+                "pre-push and pre-merge-commit hooks, preserving any "
+                "other content (e.g. the legacy risk-classifier calls "
+                "installed by `gitscribe init`). Deletes a hook file "
+                "entirely if nothing else was in it."
             ),
         ),
         force_agentic: bool = typer.Option(
@@ -353,6 +393,13 @@ def register_verify_command(
             )
             return
 
+        if uninstall_hook:
+            push_message = uninstall_pre_push_hook()
+            merge_message = uninstall_pre_merge_hook()
+            typer.echo(f"pre-push hook: {push_message}")
+            typer.echo(f"pre-merge-commit hook: {merge_message}")
+            return
+
         if agentic and not force_agentic:
             typer.echo(
                 "note: --agentic is deprecated, use --force-agentic instead "
@@ -398,29 +445,35 @@ def register_verify_command(
                 "verify` (see --force-agentic --help)."
             )
 
-        try:
-            cfg = loader(
-                find_config_path()
-            )
-        except Exception as exc:
-            typer.echo(
-                "validation configuration "
-                f"failed: {exc}",
-                err=True,
-            )
-            raise typer.Exit(
-                1
-            ) from exc
+        # Hook-triggered runs (--pre-push/--pre-merge) defer config loading
+        # into the per-range loop below and resolve it from each range's
+        # pre-change ref, not the working tree - see
+        # validation.config._read_config_text's docstring for why: the
+        # diff under review could itself have edited config.yaml (e.g. to
+        # set validation.enabled: false, or redirect validation.ai's
+        # base_url/api_key_env), and a hook must not trust that edit
+        # before a human has reviewed and merged it. An ad hoc
+        # `--base/--head` run stays on the working-tree config: a human
+        # explicitly chose that range and can already see the file
+        # themselves.
+        hook_triggered = pre_push or pre_merge
+        cfg: dict | None = None
 
-        if not cfg.get(
-            "enabled",
-            True,
-        ):
-            typer.echo(
-                "GitScribe validation is "
-                "disabled by configuration."
-            )
-            return
+        if not hook_triggered:
+            try:
+                cfg = loader(find_config_path())
+            except Exception as exc:
+                typer.echo(
+                    f"validation configuration failed: {exc}",
+                    err=True,
+                )
+                raise typer.Exit(1) from exc
+
+            if not cfg.get("enabled", True):
+                typer.echo(
+                    "GitScribe validation is disabled by configuration."
+                )
+                return
 
         started = time.perf_counter()
         results: list[
@@ -448,11 +501,30 @@ def register_verify_command(
                 range_base,
                 range_head,
             ) in ranges:
+                if hook_triggered:
+                    try:
+                        range_cfg = loader(find_config_path(), ref=range_base)
+                    except Exception as exc:
+                        typer.echo(
+                            f"validation configuration failed: {exc}",
+                            err=True,
+                        )
+                        raise typer.Exit(1) from exc
+
+                    if not range_cfg.get("enabled", True):
+                        typer.echo(
+                            f"GitScribe validation is disabled by "
+                            f"configuration at {range_base}."
+                        )
+                        continue
+                else:
+                    range_cfg = cfg
+
                 results.append(
                     _run_one(
                         range_base,
                         range_head,
-                        cfg,
+                        range_cfg,
                         force_ai=force_agentic,
                         paths=path or None,
                         force_mode=mode,

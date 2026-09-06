@@ -56,6 +56,18 @@ def validate_change(
     paths always run independently when their respective files are in
     scope; a deterministic finding never causes the AI pass to be skipped,
     and vice versa (see code_review.md's Finding Aggregation invariants).
+
+    Why the two passes run sequentially rather than in parallel: the AI
+    pass is given the deterministic findings as prompt context (see
+    `review_locally`'s DETERMINISTIC FINDINGS section) specifically so it
+    doesn't re-report something ruff/pip-audit already caught at the same
+    location. That's a genuine data dependency, not just an implementation
+    detail - running them concurrently would mean either dropping that
+    de-dup context (regressing report quality/noise) or racing the AI call
+    against a deterministic result it needs as input. If wall-clock time
+    becomes the priority over de-dup quality, the fix is to make that
+    trade-off explicit (e.g. a config flag to run AI without deterministic
+    context when speed matters more), not to parallelize this silently.
     """
     timings: dict[str, float] = {}
     findings = []
@@ -87,7 +99,10 @@ def validate_change(
         try:
             det_context = context.model_copy(update={"files": static_files})
             findings.extend(
-                run_deterministic(det_context)
+                run_deterministic(
+                    det_context,
+                    timeout_seconds=cfg.get("deterministic", {}).get("timeout_seconds", 60),
+                )
             )
         except DeterministicAnalysisError as exc:
             errors.append(
