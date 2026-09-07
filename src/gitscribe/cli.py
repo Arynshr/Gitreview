@@ -144,23 +144,31 @@ def init():
         console.error(".git/hooks not found - run this from a git repo root")
         raise typer.Exit(1)
 
-    dest = repo_hooks_dir / "pre-push"
-    if dest.exists():
-        console.warn(f"{dest} already exists - not overwriting. Remove it first if you want to reinstall.")
-        return
-
+    # Each hook is installed independently: an existing "pre-push" (e.g.
+    # from a prior `gitscribe verify --install-hook` run) must not prevent
+    # "pre-merge-commit"/"post-merge"/"commit-msg" from being installed too.
+    # Previously a single pre-existing hook aborted the whole command,
+    # silently skipping every other hook.
     hook_names = ["pre-push", "pre-merge-commit", "post-merge", "commit-msg"]
+    installed = 0
     for hook_name in hook_names:
-        src = Path(__file__).parent / "hooks" / f"{hook_name}.sh"
         dest = repo_hooks_dir / hook_name  # git requires the extensionless name here
+        if dest.exists():
+            console.warn(f"{dest} already exists - not overwriting. Remove it first if you want to reinstall.")
+            continue
+        src = Path(__file__).parent / "hooks" / f"{hook_name}.sh"
         if not src.exists():
             console.error(f"hook source missing: {src}")
             raise typer.Exit(1)
         dest.write_text(src.read_text())
         if os.name == "posix":
             dest.chmod(dest.stat().st_mode | stat.S_IEXEC)
+        installed += 1
 
-    console.success(f"installed {len(hook_names)} git hooks into {repo_hooks_dir}")
+    if installed:
+        console.success(f"installed {installed} git hook(s) into {repo_hooks_dir}")
+    else:
+        console.info("all git hooks already present - nothing to install")
     _ensure_merge_preview_alias()
     _ensure_api_key()
 

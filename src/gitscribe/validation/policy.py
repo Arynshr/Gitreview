@@ -10,6 +10,31 @@ _SEVERITY_RANK = {
     "critical": 4,
 }
 
+_SECRET_CATEGORY_KEYWORDS = (
+    "secret",
+    "credential",
+    "password",
+    "apikey",
+    "api key",
+    "api_key",
+    "private key",
+    "access key",
+    "token",
+)
+
+
+def _looks_like_secret(category: str) -> bool:
+    """block_secrets matches on Finding.category, which is free text (both
+    ruff's fixed categories and the AI reviewer's model-chosen ones) - not
+    a closed enum. A single keyword ("secret") is trivially missed by a
+    finding categorized e.g. "credential exposure" or "hardcoded api key".
+    This is still a substring match on free text, so it's not airtight,
+    but it closes the specific gap of a differently-worded secret category
+    silently bypassing the hard block.
+    """
+    lowered = category.lower()
+    return any(keyword in lowered for keyword in _SECRET_CATEGORY_KEYWORDS)
+
 
 def _changed_lines(diff: str) -> dict[str, set[int]]:
     """
@@ -28,6 +53,24 @@ def _changed_lines(diff: str) -> dict[str, set[int]]:
     new_line = 0
 
     for raw_line in diff.splitlines():
+        if raw_line.startswith("Binary files "):
+            # No text hunks will follow for this file - don't let a
+            # previous file's line-tracking state leak into whatever
+            # comes next in the diff.
+            current_file = None
+            continue
+
+        if raw_line.startswith("rename to "):
+            # Pure rename (no content change) never emits +++/--- lines,
+            # so without this the file would be absent from `changed`
+            # entirely and _is_new() would (correctly, but overly
+            # conservatively) treat every finding in it as new. Record it
+            # with an empty changed-line set instead: a rename introduces
+            # no new lines.
+            current_file = raw_line[len("rename to ") :].strip()
+            changed.setdefault(current_file, set())
+            continue
+
         if raw_line.startswith("+++ "):
             path = raw_line[4:].strip()
 
@@ -142,8 +185,7 @@ def evaluate(
     for finding in findings:
         if (
             block_secrets
-            and "secret"
-            in finding.category.lower()
+            and _looks_like_secret(finding.category)
         ):
             return False
 
@@ -158,17 +200,22 @@ def evaluate(
         if finding.source == "deterministic":
             return False
 
-        if finding.confidence == "high":
+        # AI-sourced finding. Per the advisory/gate rule (an ambiguous or
+        # low-confidence signal makes the gate default to the conservative
+        # path, never to "proceed") a *critical* severity finding blocks
+        # regardless of the model's own self-reported confidence. Without
+        # this, a model that hedges toward "low" confidence - whether by
+        # genuine uncertainty or because the diff content nudged it to -
+        # can make a real critical finding invisible to the gate entirely.
+        if finding.severity == "critical":
             return False
 
-        if (
-            finding.severity == "critical"
-            and finding.confidence == "medium"
-        ):
-            # A medium-confidence AI finding at critical severity still
-            # carries enough weight to block; only "low" confidence at
-            # non-high-confidence severities is treated as advisory.
+        if finding.confidence in ("high", "medium"):
             return False
+
+        # confidence == "low" at a fail_on severity below critical:
+        # surfaced in the report, but treated as advisory-only for the
+        # gate itself.
 
     return True
 

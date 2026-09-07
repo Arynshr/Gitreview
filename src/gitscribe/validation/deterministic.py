@@ -12,17 +12,22 @@ class DeterministicAnalysisError(RuntimeError):
     pass
 
 
-def _run(args: list[str]) -> subprocess.CompletedProcess[str]:
+def _run(args: list[str], timeout_seconds: float | None = None) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
             args,
             capture_output=True,
             text=True,
             check=False,
+            timeout=timeout_seconds,
         )
     except FileNotFoundError as exc:
         raise DeterministicAnalysisError(
             f"required scanner not found: {args[0]}"
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise DeterministicAnalysisError(
+            f"{args[0]} did not finish within {timeout_seconds}s"
         ) from exc
 
 
@@ -146,6 +151,7 @@ def _path_traversal_findings(
 
 def run_ruff(
     context: ChangeContext,
+    timeout_seconds: float = 60,
 ) -> list[Finding]:
     python_files = [
         file
@@ -161,10 +167,20 @@ def run_ruff(
         [
             "ruff",
             "check",
+            # Explicit --select is required: ruff's default rule set
+            # (roughly E4/E7/E9/F) does NOT include the S (flake8-bandit)
+            # rules that critical_codes/the S105-S107 secrets check/the
+            # security-category logic below all depend on. Without this,
+            # ruff silently never evaluates S608/S602/etc. at all - not a
+            # "no findings" result, a "the check never ran" result. E9/F
+            # keep the pre-existing basic error/pyflakes coverage.
+            "--select",
+            "E9,F,S",
             "--output-format=json",
             "--no-fix",
             *python_files,
-        ]
+        ],
+        timeout_seconds=timeout_seconds,
     )
 
     if result.returncode not in (0, 1):
@@ -182,15 +198,21 @@ def run_ruff(
 
     findings: list[Finding] = []
 
-    # Well-known bandit-derived codes for injection/unsafe-deserialization
-    # classes that warrant escalation above the flat "high" every other
-    # S-rule gets. Deliberately a short, high-confidence list rather than
-    # an attempt to re-grade the entire bandit rule set.
+    # Well-known bandit-derived codes for injection/unsafe-deserialization/
+    # RCE-capable classes that warrant escalation above the flat "high"
+    # every other S-rule gets. Deliberately a short, high-confidence list
+    # rather than an attempt to re-grade the entire bandit rule set -
+    # widening this further toward a general severity model is out of
+    # scope for a deliberately narrow deterministic pass (see
+    # _path_traversal_findings' docstring for the same design choice).
     critical_codes = {
         "S608",  # SQL injection via string-built query
         "S602",  # subprocess call with shell=True
         "S301",  # unsafe pickle deserialization
         "S302",  # unsafe marshal deserialization
+        "S307",  # eval() with untrusted input
+        "S102",  # exec() usage
+        "S506",  # unsafe yaml.load (arbitrary object construction)
     }
 
     for item in raw:
@@ -246,6 +268,7 @@ def run_ruff(
 
 def run_pip_audit(
     context: ChangeContext,
+    timeout_seconds: float = 60,
 ) -> list[Finding]:
     dependency_files = {
         "pyproject.toml",
@@ -270,7 +293,8 @@ def run_pip_audit(
             "pip-audit",
             "--format=json",
             ".",
-        ]
+        ],
+        timeout_seconds=timeout_seconds,
     )
 
     if result.returncode not in (0, 1):
@@ -337,11 +361,12 @@ def run_pip_audit(
 
 def run_deterministic(
     context: ChangeContext,
+    timeout_seconds: float = 60,
 ) -> list[Finding]:
     findings: list[Finding] = []
 
     findings.extend(_path_traversal_findings(context))
-    findings.extend(run_ruff(context))
-    findings.extend(run_pip_audit(context))
+    findings.extend(run_ruff(context, timeout_seconds=timeout_seconds))
+    findings.extend(run_pip_audit(context, timeout_seconds=timeout_seconds))
 
     return findings

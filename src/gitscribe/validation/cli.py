@@ -4,16 +4,21 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 import typer
 
 from gitscribe.cli import app
 from gitscribe.config_locator import find_config_path
+from gitscribe.core.hooks import get_cached_validation, store_cached_validation
 from gitscribe.validation.config import (
     load_validation_config,
 )
 from gitscribe.validation.hook import (
+    install_pre_merge_hook,
     install_pre_push_hook,
+    uninstall_pre_merge_hook,
+    uninstall_pre_push_hook,
 )
 from gitscribe.validation.mode import VALID_MODES
 from gitscribe.validation.models import (
@@ -29,6 +34,18 @@ from gitscribe.validation.policy import (
 from gitscribe.validation.resolver import (
     resolve_change,
 )
+
+# Import for its module-level `app.add_typer(sandbox_app, name="sandbox")`
+# side effect. The installed console script is
+# `gitscribe = gitscribe.validation.cli:app` (see pyproject.toml/setup.cfg
+# entry_points) - this module is the actual entrypoint Python imports at
+# startup, so anything that registers a subcommand onto the shared `app`
+# but isn't imported from here (directly or transitively) never runs its
+# registration code at all, regardless of how correct that module's own
+# code is. `sandbox` previously wasn't reachable from any import path the
+# real CLI actually takes, which is why `gitscribe sandbox` didn't exist
+# despite validation/sandbox.py being correct in isolation.
+from gitscribe.validation import sandbox as _sandbox  # noqa: F401
 
 
 def _default_new_branch_base() -> str:
@@ -87,6 +104,20 @@ def _pre_push_ranges() -> list[tuple[str, str]]:
         )
 
     return ranges
+
+
+def _pre_merge_range() -> tuple[str, str] | None:
+    """Mirrors `merge_check_cmd`'s base/head pair (core `gitscribe
+    merge-check`) so the new validation gate reviews exactly the same
+    change a merge would introduce. Returns None when no merge is in
+    progress (git provides no stdin protocol for pre-merge-commit the way
+    it does for pre-push, so this is a plain filesystem check, not review
+    logic - the actual scanning/AI/policy work still happens downstream).
+    """
+    if not Path(".git/MERGE_HEAD").is_file():
+        return None
+
+    return ("HEAD", "MERGE_HEAD")
 
 
 def _report(
@@ -183,6 +214,20 @@ def _run_one(
     force_mode: str | None = None,
     sandboxed: bool = False,
 ) -> ValidationResult:
+    # Caching only applies to whole-change reviews (no --path/--mode
+    # narrowing): a partial ad-hoc review isn't something a hook would
+    # ever re-run identically, and caching it under the same key as a
+    # full review of the same range would risk returning the wrong
+    # scope's result. get_cached_validation/store_cached_validation are
+    # themselves gated on a clean working tree (see core/hooks.py) since
+    # the deterministic/AI passes read files off disk, not git blobs.
+    cacheable = paths is None and force_mode is None
+
+    if cacheable:
+        cached = get_cached_validation(cfg, base, head, sandboxed, force_ai)
+        if cached is not None:
+            return ValidationResult.model_validate(cached)
+
     context = resolve_change(
         base=base,
         head=head,
@@ -193,7 +238,7 @@ def _run_one(
         paths=paths,
     )
 
-    return validate_change(
+    result = validate_change(
         context,
         cfg,
         force_ai=force_ai,
@@ -201,11 +246,23 @@ def _run_one(
         sandboxed=sandboxed,
     )
 
+    # Only cache a genuinely completed scan. A result with `errors` (e.g.
+    # "required scanner not found", an LLM timeout) reflects an
+    # *environment* problem, not a property of this diff - it can resolve
+    # on the very next invocation with nothing about the code changing.
+    # Caching it would make a transient failure (like ruff not being
+    # installed yet) stick around and get silently replayed as this
+    # diff's permanent status even after the environment is fixed.
+    if cacheable and not result.errors:
+        store_cached_validation(cfg, base, head, result.model_dump(), sandboxed, force_ai)
+
+    return result
+
 
 def register_verify_command(
     command_app: typer.Typer,
     config_loader: Callable[
-        [str],
+        ...,
         dict,
     ]
     | None = None,
@@ -235,22 +292,56 @@ def register_verify_command(
                 "ref updates from stdin."
             ),
         ),
+        pre_merge: bool = typer.Option(
+            False,
+            "--pre-merge",
+            help=(
+                "Resolve the change from .git/MERGE_HEAD for the "
+                "pre-merge-commit hook (base=HEAD, head=MERGE_HEAD). "
+                "No-op (exit 0) if no merge is in progress."
+            ),
+        ),
         install_hook: bool = typer.Option(
             False,
             "--install-hook",
             help=(
-                "Install or safely upgrade "
-                "the GitScribe pre-push hook."
+                "Install or safely upgrade the GitScribe pre-push and "
+                "pre-merge-commit hooks."
+            ),
+        ),
+        uninstall_hook: bool = typer.Option(
+            False,
+            "--uninstall-hook",
+            help=(
+                "Remove only the GitScribe-authored lines from the "
+                "pre-push and pre-merge-commit hooks, preserving any "
+                "other content (e.g. the legacy risk-classifier calls "
+                "installed by `gitscribe init`). Deletes a hook file "
+                "entirely if nothing else was in it."
+            ),
+        ),
+        force_agentic: bool = typer.Option(
+            False,
+            "--force-agentic",
+            help=(
+                "Force the sandboxed AI review pass to run even if "
+                "validation.ai.enabled is false in config.yaml. This only "
+                "overrides that enabled gate - it is never a dependency on "
+                "the deterministic/static path's results, which always "
+                "run independently regardless of this flag. Implies "
+                "--sandboxed: gitscribe verify's AI reviewer only ever "
+                "runs inside the local, loopback-only sandbox - there is "
+                "no cloud/agentic mode here, unlike `gitscribe review "
+                "--sandboxed`. For a permanent/CI setting instead of "
+                "remembering this flag every time, set "
+                "validation.ai.force: true in config.yaml."
             ),
         ),
         agentic: bool = typer.Option(
             False,
             "--agentic",
-            help=(
-                "Force the local AI review pass "
-                "to run even if validation.ai.enabled "
-                "is false in config.yaml."
-            ),
+            hidden=True,
+            help="Deprecated alias for --force-agentic.",
         ),
         path: list[str] = typer.Option(
             None,
@@ -295,9 +386,8 @@ def register_verify_command(
     ) -> None:
         if install_hook:
             try:
-                message = (
-                    install_pre_push_hook()
-                )
+                push_message = install_pre_push_hook()
+                merge_message = install_pre_merge_hook()
             except RuntimeError as exc:
                 typer.echo(
                     str(exc),
@@ -308,9 +398,27 @@ def register_verify_command(
                 ) from exc
 
             typer.echo(
-                f"pre-push hook: {message}"
+                f"pre-push hook: {push_message}"
+            )
+            typer.echo(
+                f"pre-merge-commit hook: {merge_message}"
             )
             return
+
+        if uninstall_hook:
+            push_message = uninstall_pre_push_hook()
+            merge_message = uninstall_pre_merge_hook()
+            typer.echo(f"pre-push hook: {push_message}")
+            typer.echo(f"pre-merge-commit hook: {merge_message}")
+            return
+
+        if agentic and not force_agentic:
+            typer.echo(
+                "note: --agentic is deprecated, use --force-agentic instead "
+                "(same behavior).",
+                err=True,
+            )
+            force_agentic = True
 
         if mode is not None and mode not in VALID_MODES:
             typer.echo(
@@ -319,39 +427,65 @@ def register_verify_command(
             )
             raise typer.Exit(1)
 
-        if pre_push and (path or mode):
+        if pre_push and pre_merge:
             typer.echo(
-                "--path/--mode select files for a single ad-hoc review and "
-                "aren't supported with --pre-push (which reviews whatever "
-                "ref ranges git provides). Use validation.file_rules in "
-                "config.yaml to scope pre-push reviews instead.",
+                "--pre-push and --pre-merge are mutually exclusive.",
                 err=True,
             )
             raise typer.Exit(1)
 
-        try:
-            cfg = loader(
-                find_config_path()
-            )
-        except Exception as exc:
+        if (pre_push or pre_merge) and (path or mode):
             typer.echo(
-                "validation configuration "
-                f"failed: {exc}",
+                "--path/--mode select files for a single ad-hoc review and "
+                "aren't supported with --pre-push/--pre-merge (which "
+                "review whatever ref range the hook provides). Use "
+                "validation.file_rules in config.yaml to scope "
+                "hook-triggered reviews instead.",
                 err=True,
             )
-            raise typer.Exit(
-                1
-            ) from exc
+            raise typer.Exit(1)
 
-        if not cfg.get(
-            "enabled",
-            True,
-        ):
+        if force_agentic and not sandboxed:
+            # See --force-agentic's help text: for `verify` these two are
+            # not independent knobs the way `gitscribe review`'s cloud vs.
+            # local-sandboxed split is. Silently leaving sandboxed False
+            # here just reproduces the "agentic requested but skipped as
+            # an error under fail_closed" failure mode.
+            sandboxed = True
             typer.echo(
-                "GitScribe validation is "
-                "disabled by configuration."
+                "note: --force-agentic implies --sandboxed for `gitscribe "
+                "verify` (see --force-agentic --help)."
             )
-            return
+
+        # Hook-triggered runs (--pre-push/--pre-merge) defer config loading
+        # into the per-range loop below and resolve it from each range's
+        # pre-change ref, not the working tree - see
+        # validation.config._read_config_text's docstring for why: the
+        # diff under review could itself have edited config.yaml (e.g. to
+        # set validation.enabled: false, or redirect validation.ai's
+        # base_url/api_key_env), and a hook must not trust that edit
+        # before a human has reviewed and merged it. An ad hoc
+        # `--base/--head` run stays on the working-tree config: a human
+        # explicitly chose that range and can already see the file
+        # themselves.
+        hook_triggered = pre_push or pre_merge
+        cfg: dict | None = None
+
+        if not hook_triggered:
+            try:
+                cfg = loader(find_config_path())
+            except Exception as exc:
+                typer.echo(
+                    f"validation configuration failed: {exc}",
+                    err=True,
+                )
+                raise typer.Exit(1) from exc
+
+            if not cfg.get("enabled", True):
+                typer.echo(
+                    "GitScribe validation is disabled by configuration."
+                )
+                return
 
         started = time.perf_counter()
         results: list[
@@ -359,16 +493,19 @@ def register_verify_command(
         ] = []
 
         try:
-            ranges = (
-                _pre_push_ranges()
-                if pre_push
-                else [(base, head)]
-            )
+            if pre_push:
+                ranges = _pre_push_ranges()
+            elif pre_merge:
+                merge_range = _pre_merge_range()
+                ranges = [merge_range] if merge_range else []
+            else:
+                ranges = [(base, head)]
 
             if not ranges:
                 typer.echo(
-                    "no push updates "
-                    "require validation"
+                    "no merge in progress"
+                    if pre_merge
+                    else "no push updates require validation"
                 )
                 return
 
@@ -376,12 +513,31 @@ def register_verify_command(
                 range_base,
                 range_head,
             ) in ranges:
+                if hook_triggered:
+                    try:
+                        range_cfg = loader(find_config_path(), ref=range_base)
+                    except Exception as exc:
+                        typer.echo(
+                            f"validation configuration failed: {exc}",
+                            err=True,
+                        )
+                        raise typer.Exit(1) from exc
+
+                    if not range_cfg.get("enabled", True):
+                        typer.echo(
+                            f"GitScribe validation is disabled by "
+                            f"configuration at {range_base}."
+                        )
+                        continue
+                else:
+                    range_cfg = cfg
+
                 results.append(
                     _run_one(
                         range_base,
                         range_head,
-                        cfg,
-                        force_ai=agentic,
+                        range_cfg,
+                        force_ai=force_agentic,
                         paths=path or None,
                         force_mode=mode,
                         sandboxed=sandboxed,
