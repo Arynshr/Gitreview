@@ -35,6 +35,18 @@ from gitscribe.validation.resolver import (
     resolve_change,
 )
 
+# Import for its module-level `app.add_typer(sandbox_app, name="sandbox")`
+# side effect. The installed console script is
+# `gitscribe = gitscribe.validation.cli:app` (see pyproject.toml/setup.cfg
+# entry_points) - this module is the actual entrypoint Python imports at
+# startup, so anything that registers a subcommand onto the shared `app`
+# but isn't imported from here (directly or transitively) never runs its
+# registration code at all, regardless of how correct that module's own
+# code is. `sandbox` previously wasn't reachable from any import path the
+# real CLI actually takes, which is why `gitscribe sandbox` didn't exist
+# despite validation/sandbox.py being correct in isolation.
+from gitscribe.validation import sandbox as _sandbox  # noqa: F401
+
 
 def _default_new_branch_base() -> str:
     result = subprocess.run(

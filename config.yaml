@@ -38,19 +38,19 @@ hooks:
   commit_msg:
     enabled: true
 ignore_patterns:
-  - "*.lock"
-  - "poetry.lock"
+- '*.lock'
+- poetry.lock
 validation:
   file_rules:
-    - path: "src/gitscribe/validation/**"
-      mode: agentic
-    - path: "**/*.sql"
-      mode: static
+  - path: src/gitscribe/validation/**
+    mode: agentic
+  - path: '**/*.sql'
+    mode: static
   enabled: true
   fail_closed: true
   fail_on:
-    - critical
-    - high
+  - critical
+  - high
   block_secrets: true
   block_new_vulnerabilities: true
   deterministic:
@@ -58,7 +58,7 @@ validation:
   ai:
     enabled: true
     provider: llamacpp
-    model: qwen2.5-coder-3b-instruct-q4_k_m # or a 7B Q4_K_M gguf if hardware allows
+    model: qwen2.5-coder-3b-instruct-q4_k_m
     base_url: http://127.0.0.1:8080
     api_key_env: VALIDATION_API_KEY
     timeout_seconds: 120

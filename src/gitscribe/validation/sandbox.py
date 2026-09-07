@@ -315,7 +315,23 @@ def start_server(model_name: str | None = None, port: int = 8080, ctx_size: int 
 
     cfg = load_validation_config(find_config_path())
     model_name = model_name or cfg.get("ai", {}).get("model") or DEFAULT_MODEL
-    ctx_size = ctx_size or MODEL_REGISTRY.get(model_name, ModelSpec("", cfg.get("ai", {}).get("max_context_tokens", 6000), 0)).recommended_ctx
+
+    # Precedence: explicit --ctx arg > config.yaml's validation.ai.max_context_tokens
+    # (the single source of truth this app validates against everywhere
+    # else) > the model registry's recommended_ctx as a last-resort
+    # fallback only. Previously this looked the model up in
+    # MODEL_REGISTRY first and used *that* ctx unconditionally whenever
+    # the model was a registered one - silently overriding whatever the
+    # user had explicitly set in config.yaml, with no warning. ai.py
+    # budgets its prompt against max_context_tokens; if the server is
+    # actually started with a smaller window than that, requests get
+    # truncated/rejected in a way that looks like a model or network
+    # problem rather than a config mismatch.
+    ctx_size = (
+        ctx_size
+        or cfg.get("ai", {}).get("max_context_tokens")
+        or MODEL_REGISTRY.get(model_name, ModelSpec("", 6000, 0)).recommended_ctx
+    )
 
     binary = find_llama_server()
     if binary is None:
@@ -397,6 +413,8 @@ def status_server(port: int = 8080) -> bool:
 
     return healthy
 
+
+# --- CLI ----------------------------------------------------------------------
 
 sandbox_app = typer.Typer(help="Install and manage the local llama.cpp sandbox used by `gitscribe verify`.")
 
