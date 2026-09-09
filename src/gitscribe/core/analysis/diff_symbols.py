@@ -15,16 +15,54 @@ _DIFF_GIT_RE = re.compile(r"^diff --git a/(.+?) b/(.+)$")
 
 def changed_lines_by_file(diff_text: str) -> dict[str, list[int]]:
     """New-file line numbers touched (added or modified) per file.
+
+    Every file that has a `diff --git a/x b/y` header is present in the
+    result - with an empty list if it introduces no new lines (a pure
+    rename, or a deletion-only hunk). A file is *absent* only when its
+    diff genuinely couldn't be attributed to a path at all. This
+    distinction matters to callers doing "is this finding on a line the
+    change actually introduced" filtering (e.g.
+    `validation.policy._is_new`): "absent" must fail toward treating a
+    finding as new/in-scope (a parsing gap shouldn't silently exempt a
+    file from review), while "present with no lines" is a real, safe
+    signal that this file was seen and added nothing new.
+
+    Binary files and outright deletions (`+++ /dev/null`) stop line
+    tracking for that file - no text hunk / no new-file line numbers
+    apply to them - without discarding the empty entry already recorded
+    for it at the `diff --git` header.
+
+    This is the single canonical diff-line parser for the app (see
+    validation_layer.md section 3.2/9.6); `validation/policy.py` used to
+    duplicate this logic independently and must use this instead.
     """
     result: dict[str, list[int]] = {}
     current_file: str | None = None
     cursor: int | None = None
 
     for line in diff_text.splitlines():
+        if line.startswith("Binary files "):
+            current_file = None
+            cursor = None
+            continue
+
         m = _DIFF_GIT_RE.match(line)
         if m:
             current_file = m.group(2)
             cursor = None
+            result.setdefault(current_file, [])
+            continue
+
+        if line.startswith("+++"):
+            if line[4:].strip() == "/dev/null":
+                # Deletion: the file has no new-file lines, but it was
+                # already recorded (with an empty list) at the "diff
+                # --git" header above - keep that entry, just stop
+                # tracking a cursor for it.
+                current_file = None
+            continue
+
+        if line.startswith("---"):
             continue
 
         m = _HUNK_HEADER_RE.match(line)
@@ -35,8 +73,6 @@ def changed_lines_by_file(diff_text: str) -> dict[str, list[int]]:
         if cursor is None or current_file is None:
             continue
 
-        if line.startswith("+++") or line.startswith("---"):
-            continue
         if line.startswith("+"):
             result.setdefault(current_file, []).append(cursor)
             cursor += 1

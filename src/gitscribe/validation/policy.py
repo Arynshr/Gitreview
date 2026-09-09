@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from gitscribe.core.analysis.diff_symbols import changed_lines_by_file
 from gitscribe.validation.models import Finding
 
 _SEVERITY_RANK = {
@@ -39,87 +40,19 @@ def _looks_like_secret(category: str) -> bool:
 def _changed_lines(diff: str) -> dict[str, set[int]]:
     """
     Map each touched file to the set of line numbers actually added by
-    the diff (new-file line numbers), by parsing unified diff hunks.
+    the diff (new-file line numbers).
 
-    Used to distinguish findings on lines this change actually introduced
-    from pre-existing findings elsewhere in a touched file (e.g. ruff
-    scans the whole changed file, not just changed lines). Best-effort:
-    a file with no parseable hunk is simply absent from the result, and
-    callers must treat "absent" as "don't filter" so parsing gaps fail
-    toward blocking, not silently passing.
+    Per validation_layer.md §9.6, this no longer parses diff hunks
+    itself - that duplicated
+    `core.analysis.diff_symbols.changed_lines_by_file()`, the app's one
+    canonical diff-line parser (§3.2). This is now a thin container-type
+    adapter (list -> set) over it. `_is_new()` below still relies on
+    "file absent from this dict" meaning "don't filter" (fail toward
+    blocking on a parsing gap, not silently passing) -
+    `changed_lines_by_file()` preserves that contract, including for
+    pure renames and deletions.
     """
-    changed: dict[str, set[int]] = {}
-    current_file: str | None = None
-    new_line = 0
-
-    for raw_line in diff.splitlines():
-        if raw_line.startswith("Binary files "):
-            # No text hunks will follow for this file - don't let a
-            # previous file's line-tracking state leak into whatever
-            # comes next in the diff.
-            current_file = None
-            continue
-
-        if raw_line.startswith("rename to "):
-            # Pure rename (no content change) never emits +++/--- lines,
-            # so without this the file would be absent from `changed`
-            # entirely and _is_new() would (correctly, but overly
-            # conservatively) treat every finding in it as new. Record it
-            # with an empty changed-line set instead: a rename introduces
-            # no new lines.
-            current_file = raw_line[len("rename to ") :].strip()
-            changed.setdefault(current_file, set())
-            continue
-
-        if raw_line.startswith("+++ "):
-            path = raw_line[4:].strip()
-
-            if path == "/dev/null":
-                current_file = None
-                continue
-
-            if path.startswith("b/"):
-                path = path[2:]
-
-            current_file = path
-            changed.setdefault(current_file, set())
-            continue
-
-        if raw_line.startswith("@@ "):
-            parts = raw_line.split("@@")
-
-            if len(parts) < 2:
-                continue
-
-            tokens = parts[1].strip().split(" ")
-
-            if len(tokens) < 2:
-                continue
-
-            new_spec = tokens[1].lstrip("+").split(",")[0]
-
-            try:
-                new_line = int(new_spec)
-            except ValueError:
-                continue
-
-            continue
-
-        if current_file is None:
-            continue
-
-        if raw_line.startswith("---"):
-            continue
-
-        if raw_line.startswith("+"):
-            changed[current_file].add(new_line)
-            new_line += 1
-        elif raw_line.startswith("-"):
-            continue
-        else:
-            new_line += 1
-
-    return changed
+    return {file: set(lines) for file, lines in changed_lines_by_file(diff).items()}
 
 
 def _is_new(
