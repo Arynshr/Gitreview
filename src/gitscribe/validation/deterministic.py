@@ -5,6 +5,10 @@ import json
 import subprocess
 from pathlib import Path
 
+from gitscribe.validation.analysis.models import AnalysisScope
+from gitscribe.validation.analysis.runner import ScannerExecutionError, run_scanner_command
+from gitscribe.validation.analysis.scanners.bandit_scanner import BanditScanner
+from gitscribe.validation.analysis.scanners.ruff_scanner import RuffScanner
 from gitscribe.validation.models import ChangeContext, Finding
 
 
@@ -149,121 +153,70 @@ def _path_traversal_findings(
     return findings
 
 
+def _run_scanner_adapter(
+    scanner,
+    context: ChangeContext,
+    timeout_seconds: float,
+) -> list[Finding]:
+    """Shared ChangeContext -> AnalysisScope shim for every migrated
+    Scanner adapter (validation/analysis/scanner.py), so run_ruff()/
+    run_bandit()/future run_<x>() stay one-line wrappers instead of each
+    re-implementing this same build/run/parse + error-translation
+    sequence. ScannerExecutionError (an analysis-layer concern) is
+    translated to DeterministicAnalysisError here so callers of this
+    module - namely validation/orchestrator.py - don't need to know the
+    analysis layer exists; see run_ruff()'s docstring for why that
+    boundary matters.
+    """
+    scope = AnalysisScope(files=context.files)
+
+    command = scanner.build_command(scope, {"timeout_seconds": timeout_seconds})
+    if command is None:
+        return []
+
+    try:
+        result = run_scanner_command(command)
+    except ScannerExecutionError as exc:
+        raise DeterministicAnalysisError(str(exc)) from exc
+
+    try:
+        return scanner.parse(result, scope)
+    except ScannerExecutionError as exc:
+        raise DeterministicAnalysisError(str(exc)) from exc
+
+
 def run_ruff(
     context: ChangeContext,
     timeout_seconds: float = 60,
 ) -> list[Finding]:
-    python_files = [
-        file
-        for file in context.files
-        if file.lower().endswith(".py")
-        and Path(file).is_file()
-    ]
+    """Delegates to the registry-based RuffScanner adapter
+    (validation/analysis/scanners/ruff_scanner.py).
 
-    if not python_files:
-        return []
+    This function is now a thin wrapper kept for backward compatibility:
+    validation/orchestrator.py (and anything else importing
+    `run_ruff`/`run_deterministic` from this module) is unaffected by the
+    migration to the Scanner protocol - see validation_layer.md's
+    Required Implementation Sequence step 6 ("Migrate existing Ruff
+    implementation") and section 2.1's target-treatment row for this
+    module ("Refactor into scanner adapters; remove ad-hoc checks from
+    orchestration"). The actual subprocess execution and finding-parsing
+    logic now lives in exactly one place: RuffScanner.
+    """
+    return _run_scanner_adapter(RuffScanner(), context, timeout_seconds)
 
-    result = _run(
-        [
-            "ruff",
-            "check",
-            # Explicit --select is required: ruff's default rule set
-            # (roughly E4/E7/E9/F) does NOT include the S (flake8-bandit)
-            # rules that critical_codes/the S105-S107 secrets check/the
-            # security-category logic below all depend on. Without this,
-            # ruff silently never evaluates S608/S602/etc. at all - not a
-            # "no findings" result, a "the check never ran" result. E9/F
-            # keep the pre-existing basic error/pyflakes coverage.
-            "--select",
-            "E9,F,S",
-            "--output-format=json",
-            "--no-fix",
-            *python_files,
-        ],
-        timeout_seconds=timeout_seconds,
-    )
 
-    if result.returncode not in (0, 1):
-        raise DeterministicAnalysisError(
-            "ruff failed: "
-            + (result.stderr.strip() or "no diagnostic output")
-        )
-
-    try:
-        raw = json.loads(result.stdout or "[]")
-    except json.JSONDecodeError as exc:
-        raise DeterministicAnalysisError(
-            "ruff returned malformed JSON"
-        ) from exc
-
-    findings: list[Finding] = []
-
-    # Well-known bandit-derived codes for injection/unsafe-deserialization/
-    # RCE-capable classes that warrant escalation above the flat "high"
-    # every other S-rule gets. Deliberately a short, high-confidence list
-    # rather than an attempt to re-grade the entire bandit rule set -
-    # widening this further toward a general severity model is out of
-    # scope for a deliberately narrow deterministic pass (see
-    # _path_traversal_findings' docstring for the same design choice).
-    critical_codes = {
-        "S608",  # SQL injection via string-built query
-        "S602",  # subprocess call with shell=True
-        "S301",  # unsafe pickle deserialization
-        "S302",  # unsafe marshal deserialization
-        "S307",  # eval() with untrusted input
-        "S102",  # exec() usage
-        "S506",  # unsafe yaml.load (arbitrary object construction)
-    }
-
-    for item in raw:
-        code = str(item.get("code") or "RUFF")
-
-        security = code.startswith("S")
-
-        if code in {"S105", "S106", "S107"}:
-            category = "secrets"
-            severity = "high"
-        elif code in critical_codes:
-            category = "security"
-            severity = "critical"
-        elif security:
-            category = "security"
-            severity = "high"
-        else:
-            category = "validation"
-            severity = "medium"
-
-        findings.append(
-            Finding(
-                id=(
-                    f"ruff:{code}:"
-                    f"{item.get('filename')}:"
-                    f"{item.get('location', {}).get('row', 0)}"
-                ),
-                source="deterministic",
-                category=category,
-                rule_id=code,
-                severity=severity,
-                confidence="high",
-                file=item.get("filename"),
-                line=item.get("location", {}).get("row"),
-                message=item.get(
-                    "message",
-                    "Ruff finding",
-                ),
-                evidence=(
-                    f"Ruff rule {code} reported this location "
-                    "in the changed file."
-                ),
-                remediation=(
-                    "Review the reported rule and apply the "
-                    "recommended secure pattern."
-                ),
-                sources=["ruff"],
-            )
-        )
-
-    return findings
+def run_bandit(
+    context: ChangeContext,
+    timeout_seconds: float = 60,
+) -> list[Finding]:
+    """Delegates to the registry-based BanditScanner adapter
+    (validation/analysis/scanners/bandit_scanner.py) - Required
+    Implementation Sequence step 7. Bandit is now the sole source of
+    Python security findings; RuffScanner's `S`-rule handling was removed
+    in the same change that added this, per validation_layer.md section 7
+    (Tool Responsibility Matrix).
+    """
+    return _run_scanner_adapter(BanditScanner(), context, timeout_seconds)
 
 
 def run_pip_audit(
@@ -367,6 +320,7 @@ def run_deterministic(
 
     findings.extend(_path_traversal_findings(context))
     findings.extend(run_ruff(context, timeout_seconds=timeout_seconds))
+    findings.extend(run_bandit(context, timeout_seconds=timeout_seconds))
     findings.extend(run_pip_audit(context, timeout_seconds=timeout_seconds))
 
     return findings
