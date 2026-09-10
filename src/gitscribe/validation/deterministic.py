@@ -8,6 +8,7 @@ from pathlib import Path
 from gitscribe.validation.analysis.models import AnalysisScope
 from gitscribe.validation.analysis.runner import ScannerExecutionError, run_scanner_command
 from gitscribe.validation.analysis.scanners.bandit_scanner import BanditScanner
+from gitscribe.validation.analysis.scanners.gitleaks_scanner import GitleaksScanner
 from gitscribe.validation.analysis.scanners.ruff_scanner import RuffScanner
 from gitscribe.validation.models import ChangeContext, Finding
 
@@ -217,6 +218,24 @@ def run_bandit(
     (Tool Responsibility Matrix).
     """
     return _run_scanner_adapter(BanditScanner(), context, timeout_seconds)
+
+
+def run_gitleaks(
+    context: ChangeContext,
+    timeout_seconds: float = 60,
+) -> list[Finding]:
+    """Delegates to the registry-based GitleaksScanner adapter
+    (validation/analysis/scanners/gitleaks_scanner.py).
+
+    Unlike run_ruff()/run_bandit()/run_pip_audit(), this is deliberately
+    NOT called from run_deterministic() below - validation_layer.md
+    §10.3 requires the secret scan to run unconditionally, independent of
+    the static/agentic mode split and of `validation.deterministic.enabled`.
+    `validation/orchestrator.py` calls this directly, on the full change,
+    ahead of and separate from the run_deterministic()/mode-filtered path
+    - see orchestrator.py's `validate_change`.
+    """
+    return _run_scanner_adapter(GitleaksScanner(), context, timeout_seconds)
 
 
 def run_pip_audit(

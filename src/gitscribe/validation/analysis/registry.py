@@ -96,10 +96,12 @@ def build_default_registry() -> ScannerRegistry:
     registry = ScannerRegistry()
 
     from gitscribe.validation.analysis.scanners.bandit_scanner import BanditScanner
+    from gitscribe.validation.analysis.scanners.gitleaks_scanner import GitleaksScanner
     from gitscribe.validation.analysis.scanners.ruff_scanner import RuffScanner
 
     registry.register(RuffScanner())
     registry.register(BanditScanner())
+    registry.register(GitleaksScanner())
 
     from gitscribe.validation.analysis.scanners.stubs import STUB_SCANNERS
 

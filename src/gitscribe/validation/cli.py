@@ -34,6 +34,7 @@ from gitscribe.validation.policy import (
 from gitscribe.validation.resolver import (
     resolve_change,
 )
+from gitscribe.validation.sarif import to_sarif
 
 # Import for its module-level `app.add_typer(sandbox_app, name="sandbox")`
 # side effect. The installed console script is
@@ -379,6 +380,18 @@ def register_verify_command(
             False,
             "--json",
         ),
+        sarif: str = typer.Option(
+            None,
+            "--sarif",
+            help=(
+                "Also write a SARIF 2.1.0 report (every scanner's findings "
+                "normalized into one file - see validation/sarif.py) to this "
+                "path. Independent of --json/text output above, which is "
+                "unchanged and still the source of truth for GitScribe's "
+                "full five-value severity/confidence - SARIF's 'level' "
+                "vocabulary is coarser."
+            ),
+        ),
         debug: bool = typer.Option(
             False,
             "--debug",
@@ -621,6 +634,10 @@ def register_verify_command(
             as_json,
             debug,
         )
+
+        if sarif:
+            Path(sarif).write_text(to_sarif(final), encoding="utf-8")
+            typer.echo(f"SARIF report written to {sarif}")
 
         if final.status != "PASS":
             raise typer.Exit(1)
