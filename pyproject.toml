@@ -22,6 +22,10 @@ dependencies = [
     "ruff>=0.16.1",
     "sentence-transformers>=5.7.0",
     "typer>=0.27.1",
+    "langgraph>=0.6",
+    "langgraph-checkpoint-sqlite>=2.0",
+    "pydantic-ai-slim[openai]>=0.4",
+    "bandit>=1.8",
 ]
 
 [project.scripts]

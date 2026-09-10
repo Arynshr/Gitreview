@@ -225,7 +225,9 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 Storage/*.db
+Storage/logs/
 .jsonl
 .patch 
 .repomixignore
 repomix.config.json
+
