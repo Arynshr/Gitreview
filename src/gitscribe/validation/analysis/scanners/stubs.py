@@ -36,7 +36,6 @@ class _NotImplementedScanner:
         return {"available": False, "reason": self.preflight()}
 
 STUB_SCANNERS = [
-    _NotImplementedScanner("semgrep", "security"),
     _NotImplementedScanner("syft", "dependency"),
     _NotImplementedScanner("osv-scanner", "dependency"),
     _NotImplementedScanner("trivy", "security"),
