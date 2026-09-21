@@ -8,8 +8,9 @@ from pathlib import Path
 from gitscribe.validation.analysis.models import AnalysisScope
 from gitscribe.validation.analysis.runner import ScannerExecutionError, run_scanner_command
 from gitscribe.validation.analysis.scanners.bandit_scanner import BanditScanner
-from gitscribe.validation.analysis.scanners.gitleaks_scanner import GitleaksScanner
+from gitscribe.validation.analysis.scanners.betterleaks_scanner import BetterleaksScanner
 from gitscribe.validation.analysis.scanners.ruff_scanner import RuffScanner
+from gitscribe.validation.analysis.scanners.semgrep_scanner import SemgrepScanner
 from gitscribe.validation.models import ChangeContext, Finding
 
 
@@ -158,6 +159,7 @@ def _run_scanner_adapter(
     scanner,
     context: ChangeContext,
     timeout_seconds: float,
+    extra_config: dict | None = None,
 ) -> list[Finding]:
     """Shared ChangeContext -> AnalysisScope shim for every migrated
     Scanner adapter (validation/analysis/scanner.py), so run_ruff()/
@@ -167,11 +169,14 @@ def _run_scanner_adapter(
     translated to DeterministicAnalysisError here so callers of this
     module - namely validation/orchestrator.py - don't need to know the
     analysis layer exists; see run_ruff()'s docstring for why that
-    boundary matters.
+    boundary matters. `extra_config` merges in scanner-specific flags
+    (e.g. BetterleaksScanner's `betterleaks_live_validation`) that don't
+    fit a single positional param.
     """
     scope = AnalysisScope(files=context.files)
 
-    command = scanner.build_command(scope, {"timeout_seconds": timeout_seconds})
+    config = {"timeout_seconds": timeout_seconds, **(extra_config or {})}
+    command = scanner.build_command(scope, config)
     if command is None:
         return []
 
@@ -190,18 +195,9 @@ def run_ruff(
     context: ChangeContext,
     timeout_seconds: float = 60,
 ) -> list[Finding]:
-    """Delegates to the registry-based RuffScanner adapter
-    (validation/analysis/scanners/ruff_scanner.py).
-
-    This function is now a thin wrapper kept for backward compatibility:
-    validation/orchestrator.py (and anything else importing
-    `run_ruff`/`run_deterministic` from this module) is unaffected by the
-    migration to the Scanner protocol - see validation_layer.md's
-    Required Implementation Sequence step 6 ("Migrate existing Ruff
-    implementation") and section 2.1's target-treatment row for this
-    module ("Refactor into scanner adapters; remove ad-hoc checks from
-    orchestration"). The actual subprocess execution and finding-parsing
-    logic now lives in exactly one place: RuffScanner.
+    """Delegates to RuffScanner. Kept for backward compatibility -
+    orchestrator.py's call site is unaffected by the Scanner-protocol
+    migration.
     """
     return _run_scanner_adapter(RuffScanner(), context, timeout_seconds)
 
@@ -210,32 +206,38 @@ def run_bandit(
     context: ChangeContext,
     timeout_seconds: float = 60,
 ) -> list[Finding]:
-    """Delegates to the registry-based BanditScanner adapter
-    (validation/analysis/scanners/bandit_scanner.py) - Required
-    Implementation Sequence step 7. Bandit is now the sole source of
-    Python security findings; RuffScanner's `S`-rule handling was removed
-    in the same change that added this, per validation_layer.md section 7
-    (Tool Responsibility Matrix).
+    """Delegates to BanditScanner - sole source of Python security
+    findings (Ruff's `S`-rule handling was removed alongside this).
     """
     return _run_scanner_adapter(BanditScanner(), context, timeout_seconds)
 
 
-def run_gitleaks(
+def run_betterleaks(
     context: ChangeContext,
     timeout_seconds: float = 60,
+    extra_config: dict | None = None,
 ) -> list[Finding]:
-    """Delegates to the registry-based GitleaksScanner adapter
-    (validation/analysis/scanners/gitleaks_scanner.py).
-
-    Unlike run_ruff()/run_bandit()/run_pip_audit(), this is deliberately
-    NOT called from run_deterministic() below - validation_layer.md
-    §10.3 requires the secret scan to run unconditionally, independent of
-    the static/agentic mode split and of `validation.deterministic.enabled`.
-    `validation/orchestrator.py` calls this directly, on the full change,
-    ahead of and separate from the run_deterministic()/mode-filtered path
-    - see orchestrator.py's `validate_change`.
+    """Delegates to BetterleaksScanner (Gitleaks' successor). Not called
+    from run_deterministic() below - §10.3 requires this to run
+    unconditionally, independent of the mode split and
+    `deterministic.enabled`; see orchestrator.py. `extra_config` should
+    be the `validation.deterministic` config dict, to pass through
+    `betterleaks_live_validation`.
     """
-    return _run_scanner_adapter(GitleaksScanner(), context, timeout_seconds)
+    return _run_scanner_adapter(BetterleaksScanner(), context, timeout_seconds, extra_config)
+
+
+def run_semgrep(
+    context: ChangeContext,
+    timeout_seconds: float = 60,
+    extra_config: dict | None = None,
+) -> list[Finding]:
+    """Delegates to SemgrepScanner - generic multi-language SAST,
+    complementing Bandit's Python-only scope. Part of the
+    run_deterministic() bundle below, unlike run_betterleaks() - this is
+    capability/mode-gated like ruff/bandit, not §10.3-mandatory.
+    """
+    return _run_scanner_adapter(SemgrepScanner(), context, timeout_seconds, extra_config)
 
 
 def run_pip_audit(
@@ -334,12 +336,14 @@ def run_pip_audit(
 def run_deterministic(
     context: ChangeContext,
     timeout_seconds: float = 60,
+    extra_config: dict | None = None,
 ) -> list[Finding]:
     findings: list[Finding] = []
 
     findings.extend(_path_traversal_findings(context))
     findings.extend(run_ruff(context, timeout_seconds=timeout_seconds))
     findings.extend(run_bandit(context, timeout_seconds=timeout_seconds))
+    findings.extend(run_semgrep(context, timeout_seconds=timeout_seconds, extra_config=extra_config))
     findings.extend(run_pip_audit(context, timeout_seconds=timeout_seconds))
 
     return findings

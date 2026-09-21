@@ -10,16 +10,16 @@ Full execution DAG:
     resolve -> plan -> execute -> correlate -> [assess] -> policy -> END
            \\-> finalize_empty -> END (no-op change)
 
-`execute` runs the mandatory secret scan (Gitleaks) and the deterministic
-bundle (ruff/bandit/pip-audit via `run_deterministic`) concurrently -
-they have no data dependency. `correlate` aggregates and routes: `assess`
-(the AI pass) only runs when there are agentic-mode files and AI is
-enabled/forced, since it depends on the deterministic findings gathered
-so far for de-dup context - that dependency is why it can't also run
-concurrently with `execute`.
+`execute` runs the mandatory secret scan (Betterleaks) and the
+deterministic bundle (ruff/bandit/pip-audit via `run_deterministic`)
+concurrently - they have no data dependency. `correlate` aggregates and
+routes: `assess` (the AI pass) only runs when there are agentic-mode
+files and AI is enabled/forced, since it depends on the deterministic
+findings gathered so far for de-dup context - that dependency is why it
+can't also run concurrently with `execute`.
 
 This reuses the exact same functions `validation/orchestrator.py` used to
-own directly (run_gitleaks, run_deterministic, review_locally_async,
+own directly (run_betterleaks, run_deterministic, review_locally_async,
 aggregate, evaluate) instead of reimplementing scanning - see
 orchestrator.py, which now delegates to this graph rather than
 duplicating the pipeline.
@@ -43,8 +43,8 @@ from gitscribe.validation.ai import AIReviewError, review_locally_async
 from gitscribe.validation.analysis.models import AnalysisScope, ExecutionPlan, ScannerJob
 from gitscribe.validation.deterministic import (
     DeterministicAnalysisError,
+    run_betterleaks,
     run_deterministic,
-    run_gitleaks,
 )
 from gitscribe.validation.mode import DEFAULT_MODE, resolve_file_modes, split_by_mode
 from gitscribe.validation.models import (
@@ -151,7 +151,7 @@ def finalize_empty_node(state: ValidationState) -> dict:
 def plan_node(state: ValidationState, cfg: dict) -> dict:
     """PLANNER: resolves per-file mode (static/agentic/both, or
     `request.requested_mode` overriding all files) and builds the
-    `ExecutionPlan`. Gitleaks is always planned (§10.3, unconditional);
+    `ExecutionPlan`. Betterleaks is always planned (§10.3, unconditional);
     the deterministic bundle is planned only when enabled and there are
     static-mode files. static_files/ai_files are stashed in
     `diagnostics` rather than growing `AnalysisScope`'s schema for a
@@ -173,8 +173,8 @@ def plan_node(state: ValidationState, cfg: dict) -> dict:
 
     jobs = [
         ScannerJob(
-            job_id="gitleaks",
-            scanner="gitleaks",
+            job_id="betterleaks",
+            scanner="betterleaks",
             category="security",
             files=change.files,
             required=True,
@@ -211,15 +211,16 @@ async def execute_node(state: ValidationState, cfg: dict) -> dict:
     assert change is not None
 
     static_files = state.diagnostics.get("static_files", [])
-    timeout_seconds = cfg.get("deterministic", {}).get("timeout_seconds", 60)
+    det_cfg = cfg.get("deterministic", {})
+    timeout_seconds = det_cfg.get("timeout_seconds", 60)
 
-    async def _gitleaks() -> tuple[str, list[Finding], AnalysisError | None, float]:
+    async def _betterleaks() -> tuple[str, list[Finding], AnalysisError | None, float]:
         started = time.perf_counter()
         try:
-            findings = await asyncio.to_thread(run_gitleaks, change, timeout_seconds)
-            return "gitleaks", findings, None, time.perf_counter() - started
+            findings = await asyncio.to_thread(run_betterleaks, change, timeout_seconds, det_cfg)
+            return "betterleaks", findings, None, time.perf_counter() - started
         except DeterministicAnalysisError as exc:
-            return "gitleaks", [], AnalysisError(source="gitleaks", message=str(exc)), time.perf_counter() - started
+            return "betterleaks", [], AnalysisError(source="betterleaks", message=str(exc)), time.perf_counter() - started
 
     async def _deterministic() -> tuple[str, list[Finding], AnalysisError | None, float]:
         if not static_files:
@@ -227,12 +228,12 @@ async def execute_node(state: ValidationState, cfg: dict) -> dict:
         started = time.perf_counter()
         det_context = change.model_copy(update={"files": static_files})
         try:
-            findings = await asyncio.to_thread(run_deterministic, det_context, timeout_seconds)
+            findings = await asyncio.to_thread(run_deterministic, det_context, timeout_seconds, det_cfg)
             return "deterministic", findings, None, time.perf_counter() - started
         except DeterministicAnalysisError as exc:
             return "deterministic", [], AnalysisError(source="deterministic", message=str(exc)), time.perf_counter() - started
 
-    tasks = [_gitleaks()]
+    tasks = [_betterleaks()]
     if cfg.get("deterministic", {}).get("enabled", True):
         tasks.append(_deterministic())
 

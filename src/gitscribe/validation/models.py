@@ -11,11 +11,9 @@ ValidationTrigger = Literal["cli", "pre-push", "pre-merge", "ci", "pr", "manual"
 
 
 class ValidationRequest(BaseModel):
-    """Per validation_layer.md §5.1: the one typed request object every
-    validation entrypoint (`verify`, a hook, CI) builds, so no scanner or
-    graph node ever receives raw CLI arguments directly. `request_id` is
-    caller-assigned (e.g. a uuid4 hex from `cli.py`) so a single run can
-    be traced end to end across lifecycle states/diagnostics.
+    """Per §5.1: the one typed request object every validation entrypoint
+    builds, so no node/scanner receives raw CLI args directly.
+    `request_id` is caller-assigned, for tracing a run end to end.
     """
 
     request_id: str
@@ -30,6 +28,7 @@ class ValidationRequest(BaseModel):
     output_formats: list[str] = Field(default_factory=lambda: ["cli"])
     sandboxed: bool = False
     dry_run: bool = False
+    force_ai: bool = False
 
 
 class Finding(BaseModel):
