@@ -130,6 +130,21 @@ class DeterministicValidationConfig(BaseModel):
         "pip-audit). Previously unbounded - a hung scanner could block "
         "the push/merge indefinitely.",
     )
+    betterleaks_live_validation: bool = Field(
+        default=False,
+        description="Passes --validation to Betterleaks, which calls out "
+        "to each credential's own provider API (AWS, GitHub, etc.) to "
+        "confirm it's actually live. Off by default: real network egress "
+        "and third-party calls from what may be an unattended hook/CI "
+        "run, not something to enable silently.",
+    )
+    semgrep_config: str = Field(
+        default="auto",
+        description="Semgrep --config value. 'auto' (the default) pulls "
+        "rule recommendations from Semgrep's registry over the network "
+        "on every run - set this to a local ruleset file/directory path "
+        "for a fully offline, local-first setup.",
+    )
 
 
 class AIReviewValidationConfig(BaseModel):
@@ -150,10 +165,25 @@ class AIReviewValidationConfig(BaseModel):
     model: str = "qwen2.5-coder-3b-instruct-q4_k_m"
     base_url: str = "http://127.0.0.1:8080"
     api_key_env: str = "VALIDATION_API_KEY"
-    timeout_seconds: float = Field(gt=0, default=120)
+    timeout_seconds: float = Field(
+        gt=0,
+        default=120,
+        description="Per-model-request timeout. Not the run's total budget - "
+        "see total_timeout_seconds/max_turns.",
+    )
     max_context_tokens: int = Field(gt=0, default=6000)
     max_output_tokens: int = Field(gt=0, default=1200)
     max_file_chars: int = Field(gt=0, default=12000)
+    max_turns: int = Field(
+        gt=0,
+        default=6,
+        description="Max model requests for one review's tool-calling loop.",
+    )
+    total_timeout_seconds: float = Field(
+        gt=0,
+        default=300,
+        description="Aggregate wall-clock budget across every turn of one review.",
+    )
 
 
 class ValidationConfig(BaseModel):
@@ -169,6 +199,14 @@ class ValidationConfig(BaseModel):
     file_rules: list[FileRule] = Field(default_factory=list)
     deterministic: DeterministicValidationConfig = DeterministicValidationConfig()
     ai: AIReviewValidationConfig = AIReviewValidationConfig()
+    block_pr_generation: bool = Field(
+        default=False,
+        description="If True, a FAIL validation result (see "
+        "core/validation_bridge.py) routes PR generation to "
+        "template_fallback instead of calling the LLM. Off by default so "
+        "existing `generate`/`create-pr` behavior is unchanged unless "
+        "explicitly opted into.",
+    )
 
 
 class GitScribeConfig(BaseModel):
