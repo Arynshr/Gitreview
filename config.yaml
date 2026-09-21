@@ -53,8 +53,10 @@ validation:
   - high
   block_secrets: true
   block_new_vulnerabilities: true
+  block_pr_generation: true
   deterministic:
     enabled: true
+    betterleaks_live_validation: True
   ai:
     enabled: true
     provider: llamacpp
@@ -65,3 +67,5 @@ validation:
     max_context_tokens: 20000
     max_output_tokens: 4096
     max_file_chars: 20000
+    max_turns: 8
+    total_timeout_seconds: 600
