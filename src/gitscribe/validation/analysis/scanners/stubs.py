@@ -37,7 +37,6 @@ class _NotImplementedScanner:
 
 STUB_SCANNERS = [
     _NotImplementedScanner("syft", "dependency"),
-    _NotImplementedScanner("osv-scanner", "dependency"),
     _NotImplementedScanner("trivy", "security"),
     _NotImplementedScanner("eslint", "quality"),
     _NotImplementedScanner("bearer", "security"),

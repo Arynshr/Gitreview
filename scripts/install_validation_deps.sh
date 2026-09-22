@@ -5,21 +5,6 @@
 # shells out to (validation/analysis/scanners/*.py, deterministic.py's
 # bundle). Safe to run repeatedly - every tool is checked via `command
 # -v` first and skipped if already present.
-#
-# What this installs:
-#   ruff, bandit, pip-audit, semgrep - Python packages with CLI entrypoints
-#   betterleaks, osv-scanner         - external Go binaries
-#
-# What this deliberately does NOT install: llama-server.
-# validation/sandbox.py documents why: it downloads/tracks *model*
-# files but refuses to install the llama-server *binary* itself, since
-# that would mean running a third-party binary this tool can't
-# cryptographically verify the provenance of. Overriding that here
-# would contradict an existing, deliberate trust-boundary decision in
-# the codebase, not fix a gap. Run `gitscribe sandbox init` for model
-# setup once llama-server is on PATH via whatever route you trust
-# (a package manager, a signed release you've checked yourself, etc.).
-#
 # Usage:
 #   ./install_validation_deps.sh          # detect + install anything missing
 #   ./install_validation_deps.sh --check  # detect only, never installs

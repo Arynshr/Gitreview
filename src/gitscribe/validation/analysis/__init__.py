@@ -8,9 +8,9 @@ Scanner adapter protocol (scanner.py), and the ScannerRegistry
 gitscribe.validation.analysis.scanners.
 
 Per validation_layer.md's "Required Implementation Sequence", this is a
-staged migration: as of this change the Ruff, Bandit, Betterleaks, and
-Semgrep adapters are implemented end-to-end. Everything else (Syft, OSV,
-Trivy, ESLint, Bearer, Clang-Tidy, CodeQL) is registered as an explicit
-not-yet-implemented stub so the target registry/plan shape is visible,
-without claiming capability that doesn't exist yet.
+staged migration: as of this change the Ruff, Bandit, Betterleaks,
+Semgrep, and OSV-Scanner adapters are implemented end-to-end. Everything
+else (Syft, Trivy, ESLint, Bearer, Clang-Tidy, CodeQL) is registered as
+an explicit not-yet-implemented stub so the target registry/plan shape is
+visible, without claiming capability that doesn't exist yet.
 """

@@ -9,6 +9,7 @@ from gitscribe.validation.analysis.models import AnalysisScope
 from gitscribe.validation.analysis.runner import ScannerExecutionError, run_scanner_command
 from gitscribe.validation.analysis.scanners.bandit_scanner import BanditScanner
 from gitscribe.validation.analysis.scanners.betterleaks_scanner import BetterleaksScanner
+from gitscribe.validation.analysis.scanners.osv_scanner import OSVScanner
 from gitscribe.validation.analysis.scanners.ruff_scanner import RuffScanner
 from gitscribe.validation.analysis.scanners.semgrep_scanner import SemgrepScanner
 from gitscribe.validation.models import ChangeContext, Finding
@@ -333,6 +334,18 @@ def run_pip_audit(
     return findings
 
 
+def run_osv(
+    context: ChangeContext,
+    timeout_seconds: float = 60,
+) -> list[Finding]:
+    """Delegates to OSVScanner - multi-ecosystem dependency vulnerability
+    scanning, complementing run_pip_audit()'s Python-only scope. Gates
+    internally (OSVScanner.supports()) on whether a dependency file/
+    lockfile was touched, same as run_pip_audit()'s own gate.
+    """
+    return _run_scanner_adapter(OSVScanner(), context, timeout_seconds)
+
+
 def run_deterministic(
     context: ChangeContext,
     timeout_seconds: float = 60,
@@ -345,5 +358,6 @@ def run_deterministic(
     findings.extend(run_bandit(context, timeout_seconds=timeout_seconds))
     findings.extend(run_semgrep(context, timeout_seconds=timeout_seconds, extra_config=extra_config))
     findings.extend(run_pip_audit(context, timeout_seconds=timeout_seconds))
+    findings.extend(run_osv(context, timeout_seconds=timeout_seconds))
 
     return findings
