@@ -81,28 +81,27 @@ class ScannerRegistry:
 
 
 def build_default_registry() -> ScannerRegistry:
-    """Wires up every known adapter: 
-    Stubs make the target registry/ExecutionPlan shape visible now
-    without claiming capability gitscribe doesn't have: they are
-    registered with implemented=False, so .implemented()/.for_category()
-    never return them.
+    """Wires up the service's closed, deliberately small scanner set -
+    see /SCOPE.md for the reassessment that produced this list and why
+    Bandit, Bearer, Clang-Tidy, CodeQL, ESLint, Trivy, and pip-audit were
+    cut rather than kept registered-but-optional. This is no longer a
+    staged migration toward a larger target list (the old
+    "Required Implementation Sequence" master plan); this is the
+    intended steady state.
 
-    Tree-sitter (structural parsing, step 17) is intentionally not
-    registered here - it isn't a subprocess-based, finding-producing tool
-    the Scanner protocol fits; it becomes a structural-context input to
-    other adapters/the AI assessment stage instead, per section 4's
-    "Code Analysis" branch.
+    Tree-sitter (structural parsing) is intentionally not registered
+    here - it isn't a subprocess-based, finding-producing tool the
+    Scanner protocol fits; it becomes a structural-context input to the
+    AI assessment stage instead, if/when that's built.
     """
     registry = ScannerRegistry()
 
-    from gitscribe.validation.analysis.scanners.bandit_scanner import BanditScanner
     from gitscribe.validation.analysis.scanners.betterleaks_scanner import BetterleaksScanner
     from gitscribe.validation.analysis.scanners.osv_scanner import OSVScanner
     from gitscribe.validation.analysis.scanners.ruff_scanner import RuffScanner
     from gitscribe.validation.analysis.scanners.semgrep_scanner import SemgrepScanner
 
     registry.register(RuffScanner())
-    registry.register(BanditScanner())
     registry.register(BetterleaksScanner())
     registry.register(SemgrepScanner())
     registry.register(OSVScanner())
@@ -113,10 +112,7 @@ def build_default_registry() -> ScannerRegistry:
         registry.register(
             scanner,
             implemented=False,
-            unsupported_reason=(
-                f"{scanner.name} adapter not yet implemented - see "
-                "validation_layer.md 'Required Implementation Sequence'"
-            ),
+            unsupported_reason=(f"{scanner.name} adapter not yet implemented - see SCOPE.md"),
         )
 
     return registry

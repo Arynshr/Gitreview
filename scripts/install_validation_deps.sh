@@ -2,9 +2,30 @@
 # install_validation_deps.sh
 #
 # Detects and installs the external tools gitscribe's validation layer
-# shells out to (validation/analysis/scanners/*.py, deterministic.py's
-# bundle). Safe to run repeatedly - every tool is checked via `command
-# -v` first and skipped if already present.
+# shells out to. Per validation/SCOPE.md's reassessment, this is a
+# deliberately short, closed list - four scanners total, not a growing
+# one. Safe to run repeatedly - every tool is checked via `command -v`
+# first and skipped if already present.
+#
+# What this installs:
+#   ruff, semgrep   - Python packages with CLI entrypoints
+#   betterleaks     - external Go binary (mandatory secret scan)
+#   osv-scanner     - external Go binary (dependency vulnerabilities)
+#
+# What this deliberately does NOT install: llama-server.
+# validation/sandbox.py documents why: it downloads/tracks *model* files
+# but refuses to install the llama-server *binary* itself, since that
+# would mean running a third-party binary this tool can't
+# cryptographically verify the provenance of. This script only detects
+# it and points to `gitscribe sandbox init` for model setup.
+#
+# NOT in this list, by design, per /SCOPE.md: bandit, bearer, clang-tidy,
+# codeql, eslint, pip-audit, trivy, syft. Each was implemented and then
+# removed as redundant with one of the four tools above, operationally
+# mismatched with a per-push validation gate, or out of this service's
+# stated scope (infrastructure validation, unused SBOM generation). See
+# /SCOPE.md before re-adding any of them.
+#
 # Usage:
 #   ./install_validation_deps.sh          # detect + install anything missing
 #   ./install_validation_deps.sh --check  # detect only, never installs
@@ -35,12 +56,11 @@ os_family() {
   esac
 }
 
-# --- Python-CLI tools (ruff, bandit, pip-audit) -----------------------------
+# --- Python-CLI tools (ruff, semgrep) ---------------------------------------
 #
 # Prefer `uv tool install`: installs into an isolated environment per
 # tool and puts the binary on PATH, without touching the project's own
-# venv/dependency set - the same reasoning applies here as for any other
-# global CLI tool. Falls back to pipx, then plain pip, in that order.
+# venv/dependency set. Falls back to pipx, then plain pip.
 install_python_cli_tool() {
   local binary="$1" package="$2"
 
@@ -75,11 +95,6 @@ install_python_cli_tool() {
 }
 
 # --- Betterleaks -------------------------------------------------------------
-#
-# Not a Python package - external Go binary. Tries the package manager
-# most likely to already be on this machine first; falls back to `go
-# install` if a Go toolchain is present; otherwise reports the manual
-# steps (Homebrew tap, dnf, Docker) rather than guessing further.
 install_betterleaks() {
   if have betterleaks; then
     SUMMARY+=("betterleaks: already installed ($(command -v betterleaks))")
@@ -95,11 +110,7 @@ install_betterleaks() {
   note "installing betterleaks (not found on PATH)..."
   local family; family="$(os_family)"
 
-  if [[ "$family" == "macos" ]] && have brew; then
-    brew install betterleaks >&2 && { SUMMARY+=("betterleaks: installed via brew"); return 0; }
-  fi
-
-  if [[ "$family" == "linux" ]] && have brew; then
+  if have brew; then
     brew install betterleaks/tap/betterleaks >&2 && { SUMMARY+=("betterleaks: installed via brew tap"); return 0; }
   fi
 
@@ -123,10 +134,6 @@ install_betterleaks() {
 }
 
 # --- OSV-Scanner --------------------------------------------------------
-#
-# Another external Go binary (Google's OSV.dev vulnerability database
-# scanner). Same install-chain shape as betterleaks above, different
-# package coordinates.
 install_osv_scanner() {
   if have osv-scanner; then
     SUMMARY+=("osv-scanner: already installed ($(command -v osv-scanner))")
@@ -175,8 +182,6 @@ main() {
   note ""
 
   install_python_cli_tool ruff ruff
-  install_python_cli_tool bandit bandit
-  install_python_cli_tool pip-audit pip-audit
   install_python_cli_tool semgrep semgrep
   install_betterleaks
   install_osv_scanner
