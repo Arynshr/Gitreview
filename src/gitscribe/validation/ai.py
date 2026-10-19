@@ -358,7 +358,7 @@ async def review_locally_async(
         raise AIReviewError(f"local LLM review exceeded its turn budget: {exc}") from exc
     except UnexpectedModelBehavior as exc:
         raise AIReviewError(f"local LLM returned an unusable response: {exc}") from exc
-    except Exception as exc:  # noqa: BLE001 - network/provider errors, not ours to enumerate
+    except Exception as exc:
         raise AIReviewError(f"local LLM review failed: {exc}") from exc
 
     allowed_files = set(context.files)

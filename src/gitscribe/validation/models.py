@@ -63,6 +63,8 @@ class ValidationResult(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
     errors: list[AnalysisError] = Field(default_factory=list)
     timings: dict[str, float] = Field(default_factory=dict)
+    # Run metadata (scanner_health, planned job ids) - not findings.
+    diagnostics: dict[str, object] = Field(default_factory=dict)
 
     @property
     def passed(self) -> bool:

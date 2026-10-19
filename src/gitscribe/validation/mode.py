@@ -7,7 +7,7 @@ import pathspec
 # of gitscribe.validation.mode don't need to change.
 from gitscribe.core.config_schema import DEFAULT_MODE, VALID_MODES
 
-__all__ = ["VALID_MODES", "DEFAULT_MODE", "resolve_file_modes", "split_by_mode"]
+__all__ = ["DEFAULT_MODE", "VALID_MODES", "resolve_file_modes", "split_by_mode"]
 
 
 def resolve_file_modes(

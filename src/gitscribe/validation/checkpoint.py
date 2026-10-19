@@ -1,131 +1,98 @@
 """
-Insertion Point C: checkpointer backing the validation StateGraph.
+Latest-result persistence for `gitscribe verify` (spec §10.2, simplified).
 
-**Why AsyncSqliteSaver**: matches the local-first pattern
-`core/hooks.py`'s file cache (`.git/gitscribe-cache/`) already uses - no
-server dependency (same reasoning the Roadmap gives for rejecting Neo4j).
-Async, not the sync `SqliteSaver`, because `validation/graph.py` invokes
-via `ainvoke()`. New dependency: `langgraph-checkpoint-sqlite`.
+Replaces both the unbounded per-key file cache in `core/hooks.py` and the
+SQLite-backed LangGraph saver this module previously built. One small JSON
+file - `.git/gitscribe-cache/validation_latest.json` - holds only the most
+recent run and is overwritten (atomically) on every run, so disk and memory
+stay bounded regardless of how many runs, refs or configs are seen.
 
-**Scoping**: `SerializerProtocol` only sees the object being serialized,
-not its channel name, so scoping is type-based.
-`ScopedCheckpointSerializer` truncates `ChangeContext.diff` before it's
-persisted; everything else passes through to `JsonPlusSerializer`
-unchanged. `ValidationState.context` isn't scoped - it has no real shape
-yet. The AI node's own message history isn't scoped either -
-`validation/ai.py` still runs entirely inside `orchestrator.py`'s sync
-call and never touches this checkpointer; revisit once Insertion Point B
-puts it in the graph.
+The §10.2 invariants are kept:
+- key = `graph.derive_thread_id()` (diff hash + cfg fingerprint + sandboxed/
+  force_ai), i.e. the exact inputs the old cache key used;
+- the dirty-working-tree gate guards every read and decides reusability at
+  write time (a result computed over uncommitted edits is persisted but never
+  marked reusable, so it can't be replayed as a stale PASS after the tree
+  is cleaned);
+- results with errors, or partial (--path/--mode) runs, are never reusable;
+- no diff text is stored - `ValidationResult` carries findings only.
 
-**Burn-in**: must run in parallel with the file cache before cutover, not
-replace it immediately. `dual_write_burn_in()` writes to both and records
-whether the checkpoint write succeeded, without ever failing the run on
-that basis. Still not wired into `verify` - the graph now produces real
-`ValidationResult`s (see validation/graph.py), so the comparison is
-meaningful, but cutover should still wait for an explicit burn-in period
-rather than happening in the same change that made it possible.
+Persistence is best-effort: a failure here never fails a validation run.
 """
 
 from __future__ import annotations
 
+import contextlib
+import json
 import logging
+import os
 from pathlib import Path
-from typing import Any
 
-from langgraph.checkpoint.serde.base import SerializerProtocol
-from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-
-from gitscribe.core.hooks import CACHE_DIR, store_cached_validation
-from gitscribe.validation.models import ChangeContext
+from gitscribe.core.hooks import CACHE_DIR, _clean_working_tree
+from gitscribe.validation.graph import derive_thread_id
+from gitscribe.validation.models import ValidationResult
 
 logger = logging.getLogger("gitscribe.validation.checkpoint")
 
-_DIFF_PREVIEW_CHARS = 500
+LATEST_FILE = "validation_latest.json"
 
 
-class ScopedCheckpointSerializer:
-    """Wraps `JsonPlusSerializer`; redacts `ChangeContext.diff` down to a
-    short preview before it's persisted. See module docstring.
+def latest_path() -> Path:
+    return CACHE_DIR / LATEST_FILE
+
+
+def load_reusable(cfg: dict, base: str, head: str, *extra: object) -> ValidationResult | None:
+    """The persisted result, only if it is safe to replay for these inputs.
+    Any failure (git error, missing/corrupt file, schema drift) is a miss,
+    never an exception - reading the cache must not fail a run.
     """
+    try:
+        if not _clean_working_tree():
+            return None
 
-    def __init__(self, inner: SerializerProtocol | None = None) -> None:
-        self._inner: SerializerProtocol = inner or JsonPlusSerializer()
+        data = json.loads(latest_path().read_text(encoding="utf-8"))
 
-    def dumps_typed(self, obj: Any) -> tuple[str, bytes]:
-        if isinstance(obj, ChangeContext):
-            obj = obj.model_copy(update={"diff": self._scope_diff(obj.diff)})
+        if not data.get("reusable") or data.get("key") != derive_thread_id(cfg, base, head, *extra):
+            return None
 
-        return self._inner.dumps_typed(obj)
-
-    def loads_typed(self, data: tuple[str, bytes]) -> Any:
-        return self._inner.loads_typed(data)
-
-    @staticmethod
-    def _scope_diff(diff: str) -> str:
-        if len(diff) <= _DIFF_PREVIEW_CHARS:
-            return diff
-
-        truncated = len(diff) - _DIFF_PREVIEW_CHARS
-        return (
-            diff[:_DIFF_PREVIEW_CHARS]
-            + f"\n... [{truncated} chars truncated for checkpoint storage - "
-            "re-resolve from git for the full diff, do not rely on a checkpointed copy]"
-        )
+        return ValidationResult.model_validate(data["result"])
+    except FileNotFoundError:
+        return None
+    except Exception as exc:
+        logger.debug("ignoring unusable persisted validation result: %s", exc)
+        return None
 
 
-def checkpoint_db_path(repo_root: str | Path = ".") -> Path:
-    """`.git/gitscribe-cache/validation_checkpoints.sqlite` - same
-    `CACHE_DIR` the file cache uses, so both coexist during burn-in.
-    """
-    return Path(repo_root) / CACHE_DIR / "validation_checkpoints.sqlite"
-
-
-def build_checkpointer(repo_root: str | Path = "."):
-    """Caller must call `dirty_tree_gate()` before using this for a
-    read/write - this only constructs the saver. Use as
-    `async with build_checkpointer() as saver:`.
-    """
-    db_path = checkpoint_db_path(repo_root)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-
-    return AsyncSqliteSaver.from_conn_string(str(db_path), serde=ScopedCheckpointSerializer())
-
-
-async def dual_write_burn_in(
+def save_latest(
+    result: ValidationResult,
     cfg: dict,
     base: str,
     head: str,
-    result_dict: dict,
     *extra: object,
-) -> dict:
-    """Writes to the file cache (unchanged, authoritative) and reports
-    whether an equivalent checkpoint write would have succeeded, without
-    ever failing the run on that basis. Returns a diagnostics dict for
-    `ValidationState.diagnostics`, not a validation finding.
+    cacheable: bool,
+) -> None:
+    """Overwrites the single latest-result file. `cacheable` is False for
+    partial runs; reusability is further limited to error-free results on a
+    clean tree (see module docstring). Leaves no temp file behind on failure.
     """
-    store_cached_validation(cfg, base, head, result_dict, *extra)
-
-    diagnostics: dict[str, Any] = {"checkpoint_burn_in": {"attempted": True}}
+    tmp: Path | None = None
 
     try:
-        async with build_checkpointer() as saver:
-            thread_id = f"burnin:{base}:{head}"
-            config = {"configurable": {"thread_id": thread_id}}
-            checkpoint = {
-                "v": 1,
-                "ts": "",
-                "id": thread_id,
-                "channel_values": {"result": result_dict},
-                "channel_versions": {},
-                "versions_seen": {},
-            }
-            await saver.aput(config, checkpoint, {}, {})
+        payload = {
+            "key": derive_thread_id(cfg, base, head, *extra),
+            "reusable": cacheable and not result.errors and _clean_working_tree(),
+            "result": result.model_dump(mode="json"),
+        }
 
-        diagnostics["checkpoint_burn_in"]["write_ok"] = True
-    except Exception as exc:  # noqa: BLE001 - burn-in must never fail the run
-        logger.warning("checkpoint burn-in write failed (file cache is unaffected): %s", exc)
-        diagnostics["checkpoint_burn_in"]["write_ok"] = False
-        diagnostics["checkpoint_burn_in"]["error"] = str(exc)
+        path = latest_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
 
-    return diagnostics
+        tmp = path.with_suffix(f".tmp.{os.getpid()}")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception as exc:
+        logger.warning("could not persist latest validation result: %s", exc)
+
+        if tmp is not None:
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)

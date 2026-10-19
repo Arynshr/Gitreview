@@ -91,4 +91,4 @@ class ExecutionPlan(BaseModel):
     must be Pydantic models".
     """
 
-    jobs: list[ScannerJob] = Field(default_factory=list)    
+    jobs: list[ScannerJob] = Field(default_factory=list)

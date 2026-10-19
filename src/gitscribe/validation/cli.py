@@ -10,7 +10,20 @@ import typer
 
 from gitscribe.cli import app
 from gitscribe.config_locator import find_config_path
-from gitscribe.core.hooks import get_cached_validation, store_cached_validation
+
+# Import for its module-level `app.add_typer(sandbox_app, name="sandbox")`
+# side effect. The installed console script is
+# `gitscribe = gitscribe.validation.cli:app` (see pyproject.toml/setup.cfg
+# entry_points) - this module is the actual entrypoint Python imports at
+# startup, so anything that registers a subcommand onto the shared `app`
+# but isn't imported from here (directly or transitively) never runs its
+# registration code at all, regardless of how correct that module's own
+# code is. `sandbox` previously wasn't reachable from any import path the
+# real CLI actually takes, which is why `gitscribe sandbox` didn't exist
+# despite validation/sandbox.py being correct in isolation.
+from gitscribe.validation import sandbox as _sandbox  # noqa: F401
+from gitscribe.validation.analysis.registry import build_default_registry
+from gitscribe.validation.checkpoint import load_reusable, save_latest
 from gitscribe.validation.config import (
     load_validation_config,
 )
@@ -35,18 +48,6 @@ from gitscribe.validation.resolver import (
     resolve_change,
 )
 from gitscribe.validation.sarif import to_sarif
-
-# Import for its module-level `app.add_typer(sandbox_app, name="sandbox")`
-# side effect. The installed console script is
-# `gitscribe = gitscribe.validation.cli:app` (see pyproject.toml/setup.cfg
-# entry_points) - this module is the actual entrypoint Python imports at
-# startup, so anything that registers a subcommand onto the shared `app`
-# but isn't imported from here (directly or transitively) never runs its
-# registration code at all, regardless of how correct that module's own
-# code is. `sandbox` previously wasn't reachable from any import path the
-# real CLI actually takes, which is why `gitscribe sandbox` didn't exist
-# despite validation/sandbox.py being correct in isolation.
-from gitscribe.validation import sandbox as _sandbox  # noqa: F401
 
 
 def _default_new_branch_base() -> str:
@@ -193,6 +194,13 @@ def _report(
                 f"{error.message}"
             )
 
+    if debug and result.diagnostics:
+        typer.echo(f"\nJobs: {', '.join(result.diagnostics.get('jobs', [])) or '(none)'}")
+
+        for name, problem in result.diagnostics.get("scanner_health", {}).items():
+            if problem:
+                typer.echo(f"  {name}: {problem}")
+
     if debug and result.timings:
         typer.echo("\nTimings:")
 
@@ -219,15 +227,15 @@ def _run_one(
     # narrowing): a partial ad-hoc review isn't something a hook would
     # ever re-run identically, and caching it under the same key as a
     # full review of the same range would risk returning the wrong
-    # scope's result. get_cached_validation/store_cached_validation are
-    # themselves gated on a clean working tree (see core/hooks.py) since
-    # the deterministic/AI passes read files off disk, not git blobs.
+    # scope's result. Reuse is further gated on a clean working tree (see
+    # validation/checkpoint.py) since the deterministic/AI passes read
+    # files off disk, not git blobs.
     cacheable = paths is None and force_mode is None
 
     if cacheable:
-        cached = get_cached_validation(cfg, base, head, sandboxed, force_ai)
+        cached = load_reusable(cfg, base, head, sandboxed, force_ai)
         if cached is not None:
-            return ValidationResult.model_validate(cached)
+            return cached
 
     context = resolve_change(
         base=base,
@@ -247,15 +255,9 @@ def _run_one(
         sandboxed=sandboxed,
     )
 
-    # Only cache a genuinely completed scan. A result with `errors` (e.g.
-    # "required scanner not found", an LLM timeout) reflects an
-    # *environment* problem, not a property of this diff - it can resolve
-    # on the very next invocation with nothing about the code changing.
-    # Caching it would make a transient failure (like ruff not being
-    # installed yet) stick around and get silently replayed as this
-    # diff's permanent status even after the environment is fixed.
-    if cacheable and not result.errors:
-        store_cached_validation(cfg, base, head, result.model_dump(), sandboxed, force_ai)
+    # Persist only the latest run (overwrites one file). Reusability rules -
+    # clean tree, no errors, whole-change run - live in validation/checkpoint.py.
+    save_latest(result, cfg, base, head, sandboxed, force_ai, cacheable=cacheable)
 
     return result
 
@@ -320,6 +322,11 @@ def register_verify_command(
                 "installed by `gitscribe init`). Deletes a hook file "
                 "entirely if nothing else was in it."
             ),
+        ),
+        list_scanners: bool = typer.Option(
+            False,
+            "--list-scanners",
+            help="Show every registered scanner and whether it is runnable here, then exit.",
         ),
         force_agentic: bool = typer.Option(
             False,
@@ -423,6 +430,17 @@ def register_verify_command(
             merge_message = uninstall_pre_merge_hook()
             typer.echo(f"pre-push hook: {push_message}")
             typer.echo(f"pre-merge-commit hook: {merge_message}")
+            return
+
+        if list_scanners:
+            for reg in build_default_registry().all():
+                tool = reg.scanner
+                problem = (
+                    reg.unsupported_reason
+                    if not reg.implemented
+                    else getattr(tool, "preflight", lambda: None)()
+                )
+                typer.echo(f"{tool.name:<14}{tool.category:<12}{problem or 'ok'}")
             return
 
         if agentic and not force_agentic:
@@ -593,7 +611,12 @@ def register_verify_command(
             )
         }
 
+        health: dict[str, object] = {}
+        jobs: list[str] = []
+
         for result in results:
+            health.update(result.diagnostics.get("scanner_health", {}))
+            jobs.extend(j for j in result.diagnostics.get("jobs", []) if j not in jobs)
             merged_findings.extend(
                 result.findings
             )
@@ -627,6 +650,7 @@ def register_verify_command(
             findings=merged_findings,
             errors=errors,
             timings=timings,
+            diagnostics={"scanner_health": health, "jobs": jobs},
         )
 
         _report(

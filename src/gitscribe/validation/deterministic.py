@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Callable
 from pathlib import Path
 
 from gitscribe.validation.analysis.models import AnalysisScope
@@ -219,18 +220,36 @@ def run_osv(
     return _run_scanner_adapter(OSVScanner(), context, timeout_seconds)
 
 
+Runner = Callable[[ChangeContext, float, dict | None], list[Finding]]
+
+# One uniform-signature entry per job `validation/graph.py`'s planner can
+# emit, keyed by ScannerJob.scanner (== Scanner.name for registry-backed
+# tools). Lambdas look up run_*() at call time, so patching them still works.
+DETERMINISTIC_RUNNERS: dict[str, Runner] = {
+    "betterleaks": lambda ctx, t, cfg: run_betterleaks(ctx, t, cfg),
+    "gitscribe-path-check": lambda ctx, _t, _cfg: _path_traversal_findings(ctx),
+    "ruff": lambda ctx, t, _cfg: run_ruff(ctx, timeout_seconds=t),
+    "semgrep": lambda ctx, t, cfg: run_semgrep(ctx, timeout_seconds=t, extra_config=cfg),
+    "osv-scanner": lambda ctx, t, _cfg: run_osv(ctx, timeout_seconds=t),
+}
+
+# Everything except Betterleaks, which §10.3 requires to be planned
+# unconditionally, outside the mode split.
+BUNDLE: tuple[str, ...] = ("gitscribe-path-check", "ruff", "semgrep", "osv-scanner")
+
+
 def run_deterministic(
     context: ChangeContext,
     timeout_seconds: float = 60,
     extra_config: dict | None = None,
 ) -> list[Finding]:
+    """Sequential bundle run. The graph's `execute` node no longer calls
+    this (it runs each BUNDLE entry as its own bounded-concurrent job);
+    kept for direct/back-compat callers.
+    """
     findings: list[Finding] = []
 
-    findings.extend(_path_traversal_findings(context))
-    findings.extend(run_ruff(context, timeout_seconds=timeout_seconds))
-    findings.extend(
-        run_semgrep(context, timeout_seconds=timeout_seconds, extra_config=extra_config)
-    )
-    findings.extend(run_osv(context, timeout_seconds=timeout_seconds))
+    for name in BUNDLE:
+        findings.extend(DETERMINISTIC_RUNNERS[name](context, timeout_seconds, extra_config))
 
     return findings

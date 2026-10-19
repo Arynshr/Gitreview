@@ -30,7 +30,7 @@ _DEPENDENCY_FILES = {
     "Gemfile",
     "Gemfile.lock",
 }
- 
+
 _SEVERITY_MAP: dict[str, Severity] = {
     "critical": "critical",
     "high": "high",
@@ -47,23 +47,23 @@ class OSVScanner(OptionalScannerHooks):
     """
     name = "osv-scanner"
     category = "dependency"
-    
+
     def supports(self, scope: AnalysisScope) -> bool:
         return any(Path(f).name in _DEPENDENCY_FILES for f in scope.files)
-    
+
     def preflight(self) -> str | None:
         return None if shutil.which("osv-scanner") else "osv-scanner not found on PATH"
-    
+
     def build_command(self, scope: AnalysisScope, config:dict) -> ScannerCommand | None:
         if not self.supports(scope):
             return None
-        
+
         return ScannerCommand(
             args = ["osv-scanner", "scan", "source", "--format", "json", "."],
             timeout_seconds=config.get("timeout_seconds", 60),
             network_required= True,
         )
-        
+
     def parse(self, result: ProcessResult, scope: AnalysisScope) -> list[Finding]:
         # 0 = no vulnerabilities, 1 = vulnerabilities found, 128 = no
         # packages found in the scanned tree (an empty scan, not a
@@ -71,33 +71,33 @@ class OSVScanner(OptionalScannerHooks):
         # Anything else is a genuine tool failure.
         if result.returncode == 128:
             return []
- 
+
         if result.returncode not in (0, 1):
             raise ScannerExecutionError(
                 "osv-scanner failed: " + (result.stderr.strip() or "no diagnostic output")
             )
- 
+
         try:
             raw = json.loads(result.stdout or "{}")
         except json.JSONDecodeError as exc:
             raise ScannerExecutionError("osv-scanner returned malformed JSON") from exc
- 
+
         findings: list[Finding] = []
- 
+
         for entry in raw.get("results", []):
             source_path = (entry.get("source") or {}).get("path")
- 
+
             for pkg_entry in entry.get("packages", []):
                 package = pkg_entry.get("package", {})
                 pkg_name = package.get("name", "unknown")
                 pkg_version = package.get("version", "unknown")
                 ecosystem = package.get("ecosystem", "")
- 
+
                 for vuln in pkg_entry.get("vulnerabilities", []):
                     vuln_id = vuln.get("id", "OSV")
                     severity = _severity_of(vuln)
                     aliases = vuln.get("aliases") or []
- 
+
                     findings.append(
                         Finding(
                             id=f"osv:{vuln_id}:{pkg_name}:{pkg_version}",
@@ -122,9 +122,9 @@ class OSVScanner(OptionalScannerHooks):
                             sources=["osv-scanner"],
                         )
                     )
- 
+
         return findings
-    
+
 def severity_of(vuln: dict) -> Severity:
     """Best-effort: prefers OSV's plain-word `database_specific.severity`
     when present.

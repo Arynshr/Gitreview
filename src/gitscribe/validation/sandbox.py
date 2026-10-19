@@ -297,7 +297,7 @@ def _wait_healthy(port: int, timeout_s: int) -> bool:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as resp:  # noqa: S310
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as resp:
                 if resp.status == 200:
                     return True
         except Exception:
@@ -401,7 +401,7 @@ def status_server(port: int = 8080) -> bool:
         return False
 
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as resp:  # noqa: S310
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as resp:
             healthy = resp.status == 200
     except Exception:
         healthy = False

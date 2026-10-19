@@ -130,6 +130,12 @@ class DeterministicValidationConfig(BaseModel):
         "pip-audit). Previously unbounded - a hung scanner could block "
         "the push/merge indefinitely.",
     )
+    max_workers: int = Field(
+        gt=0,
+        default=4,
+        description="Max scanner subprocesses run concurrently in the "
+        "validation graph's execute node.",
+    )
     betterleaks_live_validation: bool = Field(
         default=False,
         description="Passes --validation to Betterleaks, which calls out "

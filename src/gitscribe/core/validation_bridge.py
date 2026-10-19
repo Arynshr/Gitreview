@@ -41,7 +41,7 @@ def validate_node(state: GitScribeState, cfg: dict) -> dict:
 
     try:
         result_state = run_validation_sync(request, validation_cfg)
-    except Exception as exc:  # noqa: BLE001 - any resolver/graph failure, not ours to enumerate
+    except Exception as exc:
         return {
             "validation_status": "ERROR",
             "validation_summary": f"validation did not complete: {exc}",

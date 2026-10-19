@@ -81,26 +81,6 @@ def _validation_cache_key(cfg: dict, base: str, head: str, *extra: object) -> st
     return f"validation-{diff_key}-{cfg_digest}"
 
 
-def get_cached_validation(cfg: dict, base: str, head: str, *extra: object) -> dict | None:
-    if not _clean_working_tree():
-        return None
-
-    CACHE_DIR.mkdir(exist_ok=True)
-    cache_file = CACHE_DIR / f"{_validation_cache_key(cfg, base, head, *extra)}.json"
-
-    if cache_file.exists():
-        return json.loads(cache_file.read_text())
-
-    return None
-
-
-def store_cached_validation(cfg: dict, base: str, head: str, result: dict, *extra: object) -> None:
-    if not _clean_working_tree():
-        return
-
-    CACHE_DIR.mkdir(exist_ok=True)
-    cache_file = CACHE_DIR / f"{_validation_cache_key(cfg, base, head, *extra)}.json"
-    cache_file.write_text(json.dumps(result))
 
 def bump_for_commit(subject: str, body: str) -> str:
     m = COMMIT_RE.match(subject)

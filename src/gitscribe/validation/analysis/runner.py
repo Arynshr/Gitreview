@@ -46,7 +46,7 @@ def run_scanner_command(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            start_new_session=True,  
+            start_new_session=True,
         )
     except FileNotFoundError as exc:
         raise ScannerExecutionError(
