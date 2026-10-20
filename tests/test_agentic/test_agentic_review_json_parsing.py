@@ -12,8 +12,8 @@ import ast
 import json
 from pathlib import Path
 
-GEN_PATH = Path(__file__).parent.parent / "src" / "gitscribe" / "core" / "generator.py"
-RAG_PATH = Path(__file__).parent.parent / "src" / "gitscribe" / "core" / "analysis" / "rag.py"
+GEN_PATH = Path(__file__).resolve().parents[2] / "src" / "gitscribe" / "core" / "generator.py"
+RAG_PATH = Path(__file__).resolve().parents[2] / "src" / "gitscribe" / "core" / "analysis" / "rag.py"
 
 
 def _load_extract_json_block():
@@ -97,5 +97,5 @@ def test_run_batched_agentic_review_isolates_batch_failures():
     # try/except within the loop, not bare calls that can propagate.
     assert "try:" in func_src and "except Exception" in func_src
     # Sanity: still calls both paths (single-file fallback + batch call)
-    assert "run_agentic_review(diff_text, symbol_ids, cfg)" in func_src
-    assert "_run_batch_call(batch, cfg)" in func_src
+    assert "run_agentic_review(diff_text, symbol_ids, cfg" in func_src  # + sandboxed= kwarg
+    assert "_run_batch_call(batch, cfg" in func_src  # + sandboxed= kwarg

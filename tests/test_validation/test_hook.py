@@ -35,7 +35,7 @@ def test_hook_installation_is_idempotent(
     )
 
     assert first == "installed"
-    assert second == "already installed"
+    assert second == "already installed (current)"
     assert hook.read_text(
         encoding="utf-8"
     ) == HOOK_TEXT

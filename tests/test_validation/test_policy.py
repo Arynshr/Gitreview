@@ -95,6 +95,7 @@ def test_analysis_error_fails_closed() -> None:
     )
 def test_new_high_finding_fails_when_blocking_new_vulnerabilities():
     diff = """\
+diff --git a/fixture.py b/fixture.py
 --- a/fixture.py
 +++ b/fixture.py
 @@ -1,2 +1,3 @@
@@ -119,6 +120,7 @@ def test_new_high_finding_fails_when_blocking_new_vulnerabilities():
 
 def test_pre_existing_high_finding_does_not_fail():
     diff = """\
+diff --git a/fixture.py b/fixture.py
 --- a/fixture.py
 +++ b/fixture.py
 @@ -1,2 +1,3 @@

@@ -9,14 +9,13 @@ from gitscribe.core.indexer import index_store
 
 @pytest.fixture
 def temp_db(tmp_path, monkeypatch):
-    """semantic_checks.py does `from index_store import INDEX_DB_PATH`, which
-    binds its own module-level copy at import time -- monkeypatching
-    index_store.INDEX_DB_PATH alone would NOT affect semantic_checks. Patch
-    semantic_checks.INDEX_DB_PATH directly so this test actually exercises
-    the code path the module uses.
+    """semantic_checks opens its connection through
+    `index_store._get_connection()`, which reads `index_store.INDEX_DB_PATH`
+    at call time - so that is the one attribute to redirect (as the other
+    index-backed tests do).
     """
     db_path = tmp_path / "test_index.db"
-    monkeypatch.setattr(semantic_checks, "INDEX_DB_PATH", db_path)
+    monkeypatch.setattr(index_store, "INDEX_DB_PATH", db_path)
 
     conn = sqlite3.connect(db_path)
     conn.executescript(Path(index_store.SCHEMA_PATH).read_text())
