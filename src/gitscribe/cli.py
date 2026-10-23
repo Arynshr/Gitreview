@@ -230,14 +230,28 @@ def _ensure_api_key() -> None:
     console.success(f"wrote API_KEY to {ENV_PATH.resolve()}")
 
 
+def _apply_validate_flag(config: dict, validate: bool | None) -> dict:
+    """Per-run override of the validation stage inside generation.
+    None = follow config.yaml; False = skip validation entirely (no scanners
+    run, generation is never gated); True = run it even if config disables it.
+    """
+    if validate is not None:
+        config.setdefault("validation", {})["enabled"] = validate
+    return config
+
+
 @app.command()
 def generate(
     dry_run: bool = typer.Option(False, "--dry-run", help="Skip saving to memory; still calls the LLM"),
     style: Style = typer.Option(Style.default, "--style", help="Style preset for the generated description"),
+    validate: bool | None = typer.Option(
+        None, "--validate/--no-validate",
+        help="Run or skip the validation stage for this run (default: follow config.yaml)",
+    ),
 ):
     """Generate a PR description for the current branch's diff."""
     require_api_key()
-    config = load_config()
+    config = _apply_validate_flag(load_config(), validate)
     graph = build_graph(config)
 
     try:
@@ -293,6 +307,10 @@ def generate(
 def create_pr(
     style: Style = typer.Option(Style.default, "--style"),
     push: bool = typer.Option(True, "--push/--no-push", help="Push the branch to origin first if it has no upstream tracking branch"),
+    validate: bool | None = typer.Option(
+        None, "--validate/--no-validate",
+        help="Run or skip the validation stage for this run (default: follow config.yaml)",
+    ),
 ):
     """Generate a PR description and open the PR via `gh`.
 
@@ -349,7 +367,7 @@ def create_pr(
             raise typer.Exit(e.returncode or 1) from e
 
     require_api_key()
-    config = load_config()
+    config = _apply_validate_flag(load_config(), validate)
     graph = build_graph(config)
     try:
         result = graph.invoke(GitScribeState(

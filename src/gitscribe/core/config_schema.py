@@ -145,11 +145,11 @@ class DeterministicValidationConfig(BaseModel):
         "run, not something to enable silently.",
     )
     semgrep_config: str = Field(
-        default="auto",
-        description="Semgrep --config value. 'auto' (the default) pulls "
-        "rule recommendations from Semgrep's registry over the network "
-        "on every run - set this to a local ruleset file/directory path "
-        "for a fully offline, local-first setup.",
+        default="p/default",
+        description="Semgrep --config value. 'p/default' (the default) pulls "
+        "rules from Semgrep's registry over the network on every run. Do not "
+        "use 'auto': it requires metrics, which this scanner turns off. Set a "
+        "local ruleset file/directory path for a fully offline setup.",
     )
 
 

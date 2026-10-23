@@ -75,7 +75,7 @@ def retry_fallback_model_node(state: GitScribeState) -> dict:
 
 
 def mark_validation_blocked_node(state: GitScribeState) -> dict:
-    return {"failure_type": "validation_blocked"}
+    return {"failure_type": "validation_blocked", "last_error": state.validation_summary}
 
 
 def build_graph(cfg: dict):
