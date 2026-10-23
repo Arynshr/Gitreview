@@ -95,7 +95,7 @@ class OSVScanner(OptionalScannerHooks):
 
                 for vuln in pkg_entry.get("vulnerabilities", []):
                     vuln_id = vuln.get("id", "OSV")
-                    severity = _severity_of(vuln)
+                    severity = severity_of(vuln)
                     aliases = vuln.get("aliases") or []
 
                     findings.append(
@@ -131,4 +131,3 @@ def severity_of(vuln: dict) -> Severity:
     """
     word = str((vuln.get("database_specific") or {}).get("severity", "")).lower()
     return _SEVERITY_MAP.get(word, "medium")
-

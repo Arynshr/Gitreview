@@ -44,7 +44,7 @@ class SemgrepScanner(OptionalScannerHooks):
         if not existing_files:
             return None
 
-        ruleset = config.get("semgrep_config", "auto")
+        ruleset = config.get("semgrep_config", "p/default")
         # A local path doesn't need the registry; anything else ("auto",
         # "p/...", a bare ruleset name) does - see config_schema.py's
         # semgrep_config description for the offline alternative.

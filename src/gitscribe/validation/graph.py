@@ -7,23 +7,20 @@ state, no shared fields. The two are wired together via `core/graph.py`'s
 
 Full execution DAG:
 
-    resolve -> plan -> execute -> correlate -> [assess] -> policy -> END
+    resolve -> plan -> execute -> correlate -> policy -> END
            \\-> finalize_empty -> END (no-op change)
 
 `plan` emits one job per applicable scanner (registry `supports()`/
 `preflight()` checked there; Betterleaks always, never skipped). `execute`
 runs those jobs concurrently, bounded by `deterministic.max_workers` -
-they share no mutable state, unlike the AI pass. `correlate` aggregates and
-routes: `assess` (the AI pass) only runs when there are agentic-mode
-files and AI is enabled/forced, since it depends on the deterministic
-findings gathered so far for de-dup context - that dependency is why it
-can't also run concurrently with `execute`.
+they share no mutable state. `correlate` de-duplicates findings.
 
-This reuses the exact same functions `validation/orchestrator.py` used to
-own directly (run_betterleaks, run_deterministic, review_locally_async,
-aggregate, evaluate) instead of reimplementing scanning - see
-orchestrator.py, which now delegates to this graph rather than
-duplicating the pipeline.
+The agentic/AI review pass (`validation/ai.py`) is deliberately not wired
+into this graph; it is slated for removal from the codebase.
+
+This reuses the same functions `validation/orchestrator.py` used to own
+directly (run_betterleaks, run_deterministic, aggregate, evaluate) instead
+of reimplementing scanning - orchestrator.py delegates to this graph.
 """
 
 from __future__ import annotations
@@ -37,10 +34,8 @@ from typing import Literal
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 
-from gitscribe.core.diff_parser import get_raw_diff
 from gitscribe.core.hooks import _validation_cache_key
 from gitscribe.validation.aggregator import aggregate
-from gitscribe.validation.ai import AIReviewError, review_locally_async
 from gitscribe.validation.analysis.models import AnalysisScope, ExecutionPlan, ScannerJob
 from gitscribe.validation.analysis.registry import build_default_registry
 from gitscribe.validation.deterministic import (
@@ -48,7 +43,6 @@ from gitscribe.validation.deterministic import (
     DETERMINISTIC_RUNNERS,
     DeterministicAnalysisError,
 )
-from gitscribe.validation.mode import DEFAULT_MODE, resolve_file_modes, split_by_mode
 from gitscribe.validation.models import (
     AnalysisError,
     ChangeContext,
@@ -136,27 +130,17 @@ def finalize_empty_node(state: ValidationState) -> dict:
 
 
 def plan_node(state: ValidationState, cfg: dict) -> dict:
-    """PLANNER: resolves per-file mode (static/agentic/both, or
-    `request.requested_mode` overriding all files) and builds the
-    `ExecutionPlan`. Betterleaks is always planned (§10.3, unconditional);
-    the deterministic bundle is planned only when enabled and there are
-    static-mode files. static_files/ai_files are stashed in
-    `diagnostics` rather than growing `AnalysisScope`'s schema for a
-    split that's internal bookkeeping, not part of the scope contract.
+    """PLANNER: builds the `ExecutionPlan`. Betterleaks is always planned
+    (§10.3, unconditional); the deterministic bundle is planned when enabled.
+    The agentic/AI pass is removed from the pipeline, so per-file mode
+    (`file_rules`, `requested_mode`) no longer excludes anything from the
+    static scanners. `static_files` is stashed in `diagnostics` rather than
+    growing `AnalysisScope`'s schema.
     """
     change = state.change
     assert change is not None
 
-    if state.request.requested_mode is not None:
-        modes = dict.fromkeys(change.files, state.request.requested_mode)
-    else:
-        modes = resolve_file_modes(
-            change.files,
-            cfg.get("file_rules", []),
-            default_mode=DEFAULT_MODE,
-        )
-
-    static_files, ai_files = split_by_mode(modes)
+    static_files = list(change.files)  # no agentic pass: every file gets the static scanners
 
     registry = build_default_registry()
     errors = list(state.errors)
@@ -206,7 +190,6 @@ def plan_node(state: ValidationState, cfg: dict) -> dict:
         "diagnostics": {
             **state.diagnostics,
             "static_files": static_files,
-            "ai_files": ai_files,
             "scanner_health": health,
         },
         "lifecycle": "PLANNING",
@@ -237,7 +220,7 @@ async def execute_node(state: ValidationState, cfg: dict) -> dict:
                     DETERMINISTIC_RUNNERS[job.scanner], job_context, timeout_seconds, det_cfg
                 )
                 return job.scanner, found, None, time.perf_counter() - started
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - one job must not abort the others
                 message = str(exc) if isinstance(exc, DeterministicAnalysisError) else f"{type(exc).__name__}: {exc}"
                 logger.warning("scanner job failed scanner=%s: %s", job.scanner, message)
                 error = AnalysisError(source=job.scanner, message=message)
@@ -266,74 +249,10 @@ async def execute_node(state: ValidationState, cfg: dict) -> dict:
 
 def correlate_node(state: ValidationState) -> dict:
     """CORRELATOR: dedups/merges findings from the deterministic phase.
-    Runs again after `assess` (see `policy_node`) - `aggregate()` is
+    Re-run in `policy_node` - `aggregate()` is
     safe to call twice, it just re-merges already-merged entries.
     """
     return {"findings": aggregate(state.findings), "lifecycle": "CORRELATING"}
-
-
-def route_after_correlate(state: ValidationState, cfg: dict) -> str:
-    """Dynamic routing: the AI pass only runs for agentic-mode files
-    when AI is enabled/forced. Mirrors `orchestrator.validate_change`'s
-    `run_ai` condition exactly.
-    """
-    ai_files = state.diagnostics.get("ai_files", [])
-    ai_cfg = cfg.get("ai", {})
-
-    run_ai = bool(ai_files) and (
-        state.request.force_ai or ai_cfg.get("enabled", True) or ai_cfg.get("force", False)
-    )
-
-    return "assess" if run_ai else "policy"
-
-
-async def assess_node(state: ValidationState, cfg: dict) -> dict:
-    """ASSESSOR: the AI pass. Requires `request.sandboxed=True` to
-    actually execute - if False, the pass is skipped and recorded as an
-    error (fails the gate under `fail_closed`), mirroring
-    `orchestrator.validate_change`'s sandboxing gate.
-    """
-    change = state.change
-    assert change is not None
-
-    ai_files = state.diagnostics.get("ai_files", [])
-    errors = list(state.errors)
-    timings = dict(state.timings)
-    started = time.perf_counter()
-    ai_findings: list[Finding] = []
-
-    if not state.request.sandboxed:
-        errors.append(
-            AnalysisError(
-                source="ai",
-                message=(
-                    f"agentic review requested for {ai_files} but sandboxed=False; "
-                    "the agentic pass only runs inside the isolated local-model sandbox."
-                ),
-            )
-        )
-    else:
-        try:
-            ai_diff = (
-                change.diff
-                if set(ai_files) == set(change.files)
-                else await asyncio.to_thread(get_raw_diff, change.base, change.head, ai_files)
-            )
-            ai_context = change.model_copy(update={"files": ai_files, "diff": ai_diff})
-            deterministic_findings = [f for f in state.findings if f.source == "deterministic"]
-            ai_findings = await review_locally_async(ai_context, cfg.get("ai", {}), deterministic_findings)
-        except AIReviewError as exc:
-            errors.append(AnalysisError(source="ai", message=str(exc)))
-
-    timings["ai_s"] = time.perf_counter() - started
-
-    return {
-        "findings": state.findings + ai_findings,
-        "assessment": ai_findings,
-        "errors": errors,
-        "timings": timings,
-        "lifecycle": "ASSESSING",
-    }
 
 
 def _report_diagnostics(state: ValidationState) -> dict[str, object]:
@@ -374,7 +293,6 @@ def build_validation_graph(cfg: dict):
     g.add_node("plan", functools.partial(plan_node, cfg=cfg))
     g.add_node("execute", functools.partial(execute_node, cfg=cfg))
     g.add_node("correlate", correlate_node)
-    g.add_node("assess", functools.partial(assess_node, cfg=cfg))
     g.add_node("policy", functools.partial(policy_node, cfg=cfg))
     g.add_node("finalize_empty", finalize_empty_node)
 
@@ -382,12 +300,7 @@ def build_validation_graph(cfg: dict):
     g.add_conditional_edges("resolve", route_after_resolve, {"empty": "finalize_empty", "plan": "plan"})
     g.add_edge("plan", "execute")
     g.add_edge("execute", "correlate")
-    g.add_conditional_edges(
-        "correlate",
-        functools.partial(route_after_correlate, cfg=cfg),
-        {"assess": "assess", "policy": "policy"},
-    )
-    g.add_edge("assess", "policy")
+    g.add_edge("correlate", "policy")
     g.add_edge("policy", END)
     g.add_edge("finalize_empty", END)
 
