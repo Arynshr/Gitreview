@@ -43,7 +43,9 @@ def _symbol_to_text(sym: Symbol) -> str:
     return " | ".join(parts)
 
 
-def embed_symbols_local(symbols: list[Symbol], model_name: str = "all-MiniLM-L6-v2") -> list[np.ndarray]:
+def embed_symbols_local(
+    symbols: list[Symbol], model_name: str = "all-MiniLM-L6-v2"
+) -> list[np.ndarray]:
     model = _get_local_model(model_name)
     texts = [_symbol_to_text(s) for s in symbols]
     return list(model.encode(texts, convert_to_numpy=True))

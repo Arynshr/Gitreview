@@ -81,7 +81,6 @@ def _validation_cache_key(cfg: dict, base: str, head: str, *extra: object) -> st
     return f"validation-{diff_key}-{cfg_digest}"
 
 
-
 def bump_for_commit(subject: str, body: str) -> str:
     m = COMMIT_RE.match(subject)
     if not m:
@@ -98,9 +97,12 @@ def max_bump(bumps: list[str]) -> str:
 
 
 def next_tag(bump: str) -> str:
-    last = subprocess.run(
-        ["git", "describe", "--tags", "--abbrev=0"], capture_output=True, text=True
-    ).stdout.strip() or "v0.0.0"
+    last = (
+        subprocess.run(
+            ["git", "describe", "--tags", "--abbrev=0"], capture_output=True, text=True
+        ).stdout.strip()
+        or "v0.0.0"
+    )
     major, minor, patch = (int(x) for x in last.lstrip("v").split("."))
     if bump == "major":
         return f"v{major + 1}.0.0"
@@ -115,6 +117,8 @@ def conflicted_files(cwd: str | Path | None = None) -> list[str]:
     """
     result = subprocess.run(
         ["git", "diff", "--diff-filter=U", "--name-only"],
-        capture_output=True, text=True, cwd=cwd,
+        capture_output=True,
+        text=True,
+        cwd=cwd,
     )
     return [f for f in result.stdout.splitlines() if f]

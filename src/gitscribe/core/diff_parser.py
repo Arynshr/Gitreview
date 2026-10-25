@@ -1,6 +1,7 @@
 """
 Deterministic node: extracts and filters git diff.
 """
+
 import subprocess
 from pathlib import Path
 
@@ -14,11 +15,13 @@ DEFAULT_IGNORE_PATTERNS = ["*.lock", "package-lock.json", "*.min.js", "poetry.lo
 
 class GitCommandError(RuntimeError):
     """Raised when a required git command fails — no origin/main, shallow
-    clone, detached HEAD with no upstream, fork PR, etc. 
+    clone, detached HEAD with no upstream, fork PR, etc.
     """
 
 
-def load_ignore_spec(repo_root: str = ".", extra_patterns: list[str] | None = None) -> pathspec.PathSpec:
+def load_ignore_spec(
+    repo_root: str = ".", extra_patterns: list[str] | None = None
+) -> pathspec.PathSpec:
     """Build a gitignore-aware matcher from .gitignore + config-supplied extras."""
     gitignore_path = Path(repo_root) / ".gitignore"
     lines = []
@@ -36,7 +39,7 @@ def load_ignore_spec(repo_root: str = ".", extra_patterns: list[str] | None = No
 def _run_git(args: list[str], cwd: str | Path | None = None) -> str:
     """`cwd` lets callers run git against a different working tree (e.g. a
     disposable merge-preview worktree) without a second git-wrapper existing
-    elsewhere in the codebase. 
+    elsewhere in the codebase.
     """
     result = subprocess.run(["git", *args], capture_output=True, text=True, cwd=cwd)
     if result.returncode != 0:
@@ -87,8 +90,7 @@ def extract_files_changed(diff_text: str) -> list[str]:
 
 
 def diff_parser_node(state: GitScribeState, cfg: dict) -> dict:
-    """LangGraph node: returns partial update with raw_diff, commit_messages, files_changed.
-    """
+    """LangGraph node: returns partial update with raw_diff, commit_messages, files_changed."""
     raw_diff = state.raw_diff or get_raw_diff()
     commit_messages = state.commit_messages or get_commit_messages()
 

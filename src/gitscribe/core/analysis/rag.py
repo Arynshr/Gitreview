@@ -56,7 +56,9 @@ def retrieve(query: str, cfg: dict, top_k: int = 5, expand_depth: int = 1) -> RA
             continue
         seen_ids.add(m.symbol_id)
         snippets.append(
-            ContextSnippet(symbol_id=m.symbol_id, name=m.name, file=m.file, lineno=m.lineno, relation="match")
+            ContextSnippet(
+                symbol_id=m.symbol_id, name=m.name, file=m.file, lineno=m.lineno, relation="match"
+            )
         )
 
         for related in blast_radius(m.symbol_id, max_depth=expand_depth):
@@ -103,6 +105,7 @@ def answer_query(query: str, context: RAGContext, cfg: dict):
     response = model.invoke(prompt)
     return response.content
 
+
 _TOKENS_PER_CHAR = 0.25  # rough estimate; good enough for a hard budget cap
 
 
@@ -134,13 +137,10 @@ class _SandboxedChatModel:
     def invoke(self, prompt: str) -> types.SimpleNamespace:
         import os
 
-        parsed = urllib.parse.urlparse(
-            str(self._ai_cfg.get("base_url", "http://127.0.0.1:8080"))
-        )
+        parsed = urllib.parse.urlparse(str(self._ai_cfg.get("base_url", "http://127.0.0.1:8080")))
         if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}:
             raise _SandboxedReviewError(
-                "sandboxed agentic review endpoint must be local HTTP on "
-                "localhost/127.0.0.1"
+                "sandboxed agentic review endpoint must be local HTTP on localhost/127.0.0.1"
             )
         base_url = str(self._ai_cfg.get("base_url", "http://127.0.0.1:8080")).rstrip("/")
 
@@ -281,7 +281,11 @@ def _assemble_review_context(
     blocks = {"callers_block": "", "callees_block": "", "siblings_block": ""}
 
     # Priority: callers, then callees, then siblings — truncate siblings first.
-    for key, items in (("callers_block", callers), ("callees_block", callees), ("siblings_block", siblings)):
+    for key, items in (
+        ("callers_block", callers),
+        ("callees_block", callees),
+        ("siblings_block", siblings),
+    ):
         text = "\n".join(items) or "(none)"
         cost = _estimate_tokens(text)
         if cost > budget:
@@ -319,7 +323,9 @@ def run_agentic_review(
     diff_budget = int(max_context_tokens * 0.6)  # leave room for context + prompt scaffolding
     if _estimate_tokens(diff_hunk) > diff_budget:
         max_chars = int(diff_budget / _TOKENS_PER_CHAR)
-        diff_hunk = diff_hunk[:max_chars] + "\n[... diff truncated, exceeded per-call token budget ...]"
+        diff_hunk = (
+            diff_hunk[:max_chars] + "\n[... diff truncated, exceeded per-call token budget ...]"
+        )
 
     context = _assemble_review_context(diff_hunk, changed_symbol_ids, hops, max_context_tokens)
     prompt = _REVIEW_PROMPT.format(
@@ -583,7 +589,9 @@ def run_batched_agentic_review(
             failed_files = [c[0] for c in batch]
             logger.warning(
                 "agentic review batch failed (%d file(s): %s), skipping: %s",
-                len(failed_files), ", ".join(failed_files), exc,
+                len(failed_files),
+                ", ".join(failed_files),
+                exc,
             )
             continue
 

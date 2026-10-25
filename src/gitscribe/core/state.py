@@ -2,6 +2,7 @@
 Shared state object passed between all LangGraph nodes.
 Maps directly to the README's Context Management Strategy table.
 """
+
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -33,9 +34,12 @@ class GitScribeState(BaseModel):
     validation_status: Literal["PASS", "FAIL", "SKIPPED", "ERROR"] | None = None
     validation_findings_count: int = 0
     validation_summary: str = ""
+    # (severity, "file:line - message") for the top findings/errors only,
+    # capped in validation_bridge; full detail is `gitscribe verify`.
+    validation_findings: list[tuple[str, str]] = Field(default_factory=list)
 
     #  risk classification (agentic node)
-    risk_score: float = 1.0                # 0.0 (trivial) - 1.0 (critical)
+    risk_score: float = 1.0  # 0.0 (trivial) - 1.0 (critical)
     risk_reasoning: str = ""
     skip_generation: bool = False
 
@@ -52,7 +56,9 @@ class GitScribeState(BaseModel):
     #  failure handling (agentic router)
     attempt_count: int = 0
     last_error: str | None = None
-    failure_type: Literal["rate_limit", "bad_output", "timeout", "validation_blocked", "none"] | None = None
+    failure_type: (
+        Literal["rate_limit", "bad_output", "timeout", "validation_blocked", "none"] | None
+    ) = None
     fallback_used: bool = False
 
     # output

@@ -82,10 +82,7 @@ def search(query: str, cfg: dict, top_k: int = 10) -> list[SearchResult]:
     ).fetchall()
     conn.close()
 
-    scored = [
-        (row, cosine_similarity(query_vec, blob_to_vector(row["vector"])))
-        for row in rows
-    ]
+    scored = [(row, cosine_similarity(query_vec, blob_to_vector(row["vector"]))) for row in rows]
     scored.sort(key=lambda pair: pair[1], reverse=True)
 
     return [
@@ -99,6 +96,7 @@ def search(query: str, cfg: dict, top_k: int = 10) -> list[SearchResult]:
         )
         for row, score in scored[:top_k]
     ]
+
 
 _CALLEE_CTE = """
 WITH RECURSIVE reach(id, depth) AS (
@@ -165,9 +163,14 @@ def symbol_at(file: str, lineno: int) -> SearchResult | None:
     if row is None:
         return None
     return SearchResult(
-        symbol_id=row["id"], name=row["name"], kind=row["kind"],
-        file=row["file"], lineno=row["lineno"], score=0.0,
+        symbol_id=row["id"],
+        name=row["name"],
+        kind=row["kind"],
+        file=row["file"],
+        lineno=row["lineno"],
+        score=0.0,
     )
+
 
 def needs_reindex(repo_root: str = ".") -> bool:
     conn = _get_connection()
@@ -202,6 +205,7 @@ def _delete_symbols_for_files(conn, paths: set[str]) -> None:
     )
     conn.execute(f"DELETE FROM symbols WHERE id IN ({id_placeholders})", ids)
     conn.commit()
+
 
 def _symbol_like(row) -> SimpleNamespace:
     return SimpleNamespace(name=row["name"], file=row["file"], kind=row["kind"])
@@ -242,7 +246,9 @@ def reindex(repo_root: str, cfg: dict, force: bool = False) -> IndexRunResult:
 
     if not force and merkle.get_last_root_hash(conn) == root_hash:
         conn.close()
-        return IndexRunResult(files_changed=0, files_skipped=len(files), duration_s=0.0, skipped_entirely=True)
+        return IndexRunResult(
+            files_changed=0, files_skipped=len(files), duration_s=0.0, skipped_entirely=True
+        )
 
     diff = merkle.diff_against_stored(conn, current)
     if force:
@@ -256,7 +262,15 @@ def reindex(repo_root: str, cfg: dict, force: bool = False) -> IndexRunResult:
             cur = conn.execute(
                 """INSERT INTO symbols (name, kind, file, lineno, end_lineno, parent, file_hash)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (sym.name, sym.kind, sym.file, sym.lineno, sym.end_lineno, sym.parent, current[path]),
+                (
+                    sym.name,
+                    sym.kind,
+                    sym.file,
+                    sym.lineno,
+                    sym.end_lineno,
+                    sym.parent,
+                    current[path],
+                ),
             )
             new_symbols_with_ids.append((cur.lastrowid, sym))
 
@@ -275,7 +289,11 @@ def reindex(repo_root: str, cfg: dict, force: bool = False) -> IndexRunResult:
             )
         conn.commit()
 
-        embeddable = [(sid, sym) for sid, sym in new_symbols_with_ids if sym.kind in ("function", "class", "method")]
+        embeddable = [
+            (sid, sym)
+            for sid, sym in new_symbols_with_ids
+            if sym.kind in ("function", "class", "method")
+        ]
         if embeddable:
             vectors = embed_symbols([s for _, s in embeddable], cfg)
             model_name = cfg.get("embedding", {}).get("model", "all-MiniLM-L6-v2")
@@ -289,7 +307,12 @@ def reindex(repo_root: str, cfg: dict, force: bool = False) -> IndexRunResult:
 
     _reresolve_unresolved_edges(conn)
     merkle.sync_file_hashes(conn, diff, current)
-    merkle.record_run(conn, root_hash, files_changed=len(diff.touched), files_skipped=len(files) - len(diff.touched))
+    merkle.record_run(
+        conn,
+        root_hash,
+        files_changed=len(diff.touched),
+        files_skipped=len(files) - len(diff.touched),
+    )
     conn.close()
 
     return IndexRunResult(

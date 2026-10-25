@@ -85,8 +85,7 @@ def changed_lines_by_file(diff_text: str) -> dict[str, list[int]]:
 
 
 def split_diff_by_file(diff_text: str) -> dict[str, str]:
-    """Splits a multi-file `git diff` into one diff-text chunk per file.
-    """
+    """Splits a multi-file `git diff` into one diff-text chunk per file."""
     chunks: dict[str, list[str]] = {}
     current_file: str | None = None
 

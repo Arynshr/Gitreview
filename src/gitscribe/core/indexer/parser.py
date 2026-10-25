@@ -36,9 +36,13 @@ class Symbol(BaseModel):
     lineno: int
     end_lineno: int | None = None
     parent: str | None = None  # class name, if kind == "method"
-    calls: list[str] = Field(default_factory=list)  # raw call names, resolved later in graph_builder
+    calls: list[str] = Field(
+        default_factory=list
+    )  # raw call names, resolved later in graph_builder
     bases: list[str] = Field(default_factory=list)  # raw base-class names, kind == "class" only
-    docstring: str | None = None  # cleaned via ast.get_docstring(); None if absent or kind == "import"
+    docstring: str | None = (
+        None  # cleaned via ast.get_docstring(); None if absent or kind == "import"
+    )
     snippet: str | None = None  # first few body statements (unparsed), docstring itself excluded
 
 

@@ -1,6 +1,7 @@
 """
 Provider-agnostic chat model factory.
 """
+
 import os
 
 from langchain.chat_models import init_chat_model
@@ -11,8 +12,7 @@ class MissingAPIKeyError(RuntimeError):
 
 
 def build_chat_model(cfg: dict, model_name: str, temperature: float = 0.0):
-    """Build a chat model for `model_name` using cfg["llm"]["provider"]/["base_url"].
-    """
+    """Build a chat model for `model_name` using cfg["llm"]["provider"]/["base_url"]."""
     api_key = os.environ.get("API_KEY")
     if not api_key:
         raise MissingAPIKeyError(

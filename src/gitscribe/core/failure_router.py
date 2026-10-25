@@ -1,6 +1,7 @@
 """
 Agentic node #4: failure-recovery routing.
 """
+
 from gitscribe.core.state import GitScribeState
 
 
@@ -29,9 +30,9 @@ def route_after_failure(state: GitScribeState, cfg: dict) -> str:
 
     failure_type = state.failure_type
     if failure_type == "rate_limit":
-        return "retry_same_model"       # backoff + retry
+        return "retry_same_model"  # backoff + retry
     if failure_type == "timeout":
         return "retry_same_model"
     if failure_type == "bad_output":
-        return "retry_fallback_model"   # switch to smaller/more reliable model
+        return "retry_fallback_model"  # switch to smaller/more reliable model
     return "template_fallback"

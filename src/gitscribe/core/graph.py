@@ -22,6 +22,7 @@ two graphs' state (see validation_bridge.py's docstring). It is a no-op
 pass-through (routes to "continue") unless `validation.block_pr_generation`
 is explicitly enabled, so existing behavior is unchanged by default.
 """
+
 import functools
 import time
 
@@ -107,17 +108,25 @@ def build_graph(cfg: dict):
     )
     g.add_edge("mark_validation_blocked", "template_fallback")
 
-    g.add_conditional_edges("risk_classifier", route_after_risk, {
-        "skip": "template_fallback",
-        "retrieve": "retriever",
-    })
+    g.add_conditional_edges(
+        "risk_classifier",
+        route_after_risk,
+        {
+            "skip": "template_fallback",
+            "retrieve": "retriever",
+        },
+    )
 
     g.add_edge("retriever", "generator")
 
-    g.add_conditional_edges("generator", lambda s: s.status, {
-        "success": END,
-        "failed": "failure_router",
-    })
+    g.add_conditional_edges(
+        "generator",
+        lambda s: s.status,
+        {
+            "success": END,
+            "failed": "failure_router",
+        },
+    )
 
     g.add_conditional_edges(
         "failure_router",

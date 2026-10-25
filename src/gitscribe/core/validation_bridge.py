@@ -22,6 +22,9 @@ import uuid
 from gitscribe.core.state import GitScribeState
 from gitscribe.validation.graph import run_validation_sync
 from gitscribe.validation.models import ValidationRequest
+from gitscribe.validation.policy import sort_findings
+
+_MAX_SURFACED = 10
 
 
 def validate_node(state: GitScribeState, cfg: dict) -> dict:
@@ -41,7 +44,7 @@ def validate_node(state: GitScribeState, cfg: dict) -> dict:
 
     try:
         result_state = run_validation_sync(request, validation_cfg)
-    except Exception as exc:  # noqa: BLE001 - any resolver/graph failure, not ours to enumerate
+    except Exception as exc:
         return {
             "validation_status": "ERROR",
             "validation_summary": f"validation did not complete: {exc}",
@@ -58,10 +61,18 @@ def validate_node(state: GitScribeState, cfg: dict) -> dict:
         + "".join(f"; {e.source}: {e.message}" for e in result.errors[:3])
     )
 
+    surfaced: list[tuple[str, str]] = [
+        ("error", f"{e.source}: {e.message}"[:200]) for e in result.errors
+    ]
+    for f in sort_findings(result.findings):
+        loc = f"{f.file}:{f.line}" if f.file and f.line else (f.file or "(repository)")
+        surfaced.append((f.severity, f"{loc} - {f.message}"[:200]))
+
     return {
         "validation_status": result.status,
         "validation_findings_count": len(result.findings),
         "validation_summary": summary,
+        "validation_findings": surfaced[:_MAX_SURFACED],
     }
 
 
