@@ -50,6 +50,7 @@ Respond with ONLY the JSON object. No preamble, no explanation, no markdown \
 fence around it — just the raw JSON, starting with {{ and ending with }}."""
 )
 
+
 def _find_balanced_end(text: str, start: int) -> int | None:
     """Index of the closing '}' matching the '{' at `start`, scanning
     brace depth string-aware (a brace inside a quoted JSON string value
@@ -104,18 +105,19 @@ def _extract_json_block(text: str) -> str:
 
 def generator_node(state: GitScribeState, cfg: dict) -> dict:
     """LangGraph node: returns partial update with pr_title, pr_body, status, etc."""
-    model_name = cfg["llm"]["model"] if not state.fallback_used \
-        else cfg["llm"]["fallback_model"]
+    model_name = cfg["llm"]["model"] if not state.fallback_used else cfg["llm"]["fallback_model"]
     style_instruction = STYLE_INSTRUCTIONS.get(state.style, STYLE_INSTRUCTIONS["default"])
 
     llm = build_chat_model(cfg, model_name, temperature=cfg["llm"]["temperature"])
-    prompt_value = GEN_PROMPT.invoke({
-        "style_instruction": style_instruction,
-        "change_summary": state.change_summary,
-        "commit_messages": state.commit_messages,
-        "past_prs": [p.title for p in state.retrieved_prs],
-        "format_instructions": PARSER.get_format_instructions(),
-    })
+    prompt_value = GEN_PROMPT.invoke(
+        {
+            "style_instruction": style_instruction,
+            "change_summary": state.change_summary,
+            "commit_messages": state.commit_messages,
+            "past_prs": [p.title for p in state.retrieved_prs],
+            "format_instructions": PARSER.get_format_instructions(),
+        }
+    )
 
     # Parsing is inside the timed/logged block now, not after it — a call that
     # returns text but fails to parse into PRDescription is a failed generation

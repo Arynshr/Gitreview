@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from gitscribe.core.config_schema import GitScribeConfig
+from gitscribe.core.config_schema import DeterministicValidationConfig, GitScribeConfig
 
 VALID_RAW = {
     "llm": {"model": "llama-3.3-70b-versatile", "fallback_model": "llama-3.1-8b-instant"},
@@ -65,3 +65,31 @@ def test_as_dict_matches_node_access_pattern():
     d = cfg.as_dict()
     assert d["llm"]["model"] == "llama-3.3-70b-versatile"
     assert d["retrieval"]["max_prs"] == 10
+
+
+def test_sandboxed_timeout_seconds_must_be_positive():
+    with pytest.raises(ValidationError):
+        from gitscribe.core.config_schema import AgenticReviewConfig
+
+        AgenticReviewConfig(sandboxed_timeout_seconds=0)
+
+    with pytest.raises(ValidationError):
+        AgenticReviewConfig(sandboxed_timeout_seconds=-10)
+
+    cfg = AgenticReviewConfig(sandboxed_timeout_seconds=300)
+    assert cfg.sandboxed_timeout_seconds == 300
+
+
+def test_deterministic_max_workers_defaults_to_four():
+    assert DeterministicValidationConfig().max_workers == 4
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_deterministic_max_workers_must_be_positive(value):
+    with pytest.raises(ValidationError):
+        DeterministicValidationConfig(max_workers=value)
+
+
+def test_deterministic_timeout_must_be_positive():
+    with pytest.raises(ValidationError):
+        DeterministicValidationConfig(timeout_seconds=0)

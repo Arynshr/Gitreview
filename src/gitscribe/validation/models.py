@@ -7,6 +7,28 @@ from pydantic import BaseModel, Field
 Severity = Literal["critical", "high", "medium", "low", "info"]
 Confidence = Literal["high", "medium", "low"]
 FindingSource = Literal["deterministic", "ai"]
+ValidationTrigger = Literal["cli", "pre-push", "pre-merge", "ci", "pr", "manual"]
+
+
+class ValidationRequest(BaseModel):
+    """Per §5.1: the one typed request object every validation entrypoint
+    builds, so no node/scanner receives raw CLI args directly.
+    `request_id` is caller-assigned, for tracing a run end to end.
+    """
+
+    request_id: str
+    repo_root: str
+    base_ref: str
+    head_ref: str
+    trigger: ValidationTrigger = "cli"
+    paths: list[str] = Field(default_factory=list)
+    requested_mode: str | None = None
+    policy_name: str = "default"
+    policy_version: str = "1"
+    output_formats: list[str] = Field(default_factory=lambda: ["cli"])
+    sandboxed: bool = False
+    dry_run: bool = False
+    force_ai: bool = False
 
 
 class Finding(BaseModel):
@@ -41,6 +63,8 @@ class ValidationResult(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
     errors: list[AnalysisError] = Field(default_factory=list)
     timings: dict[str, float] = Field(default_factory=dict)
+    # Run metadata (scanner_health, planned job ids) - not findings.
+    diagnostics: dict[str, object] = Field(default_factory=dict)
 
     @property
     def passed(self) -> bool:

@@ -28,9 +28,16 @@ def test_branch_prefix_extraction():
 
 
 def test_retriever_stops_immediately_when_relevant():
-    fake = FakeListChatModel(responses=[json.dumps({"action": "stop", "reason": "relevant enough"})])
-    with patch("gitscribe.core.retriever.build_chat_model", return_value=fake), \
-         patch("gitscribe.core.retriever.memory.fetch_prs_by_branch_prefix", return_value=INITIAL_CANDIDATES):
+    fake = FakeListChatModel(
+        responses=[json.dumps({"action": "stop", "reason": "relevant enough"})]
+    )
+    with (
+        patch("gitscribe.core.retriever.build_chat_model", return_value=fake),
+        patch(
+            "gitscribe.core.retriever.memory.fetch_prs_by_branch_prefix",
+            return_value=INITIAL_CANDIDATES,
+        ),
+    ):
         result = retriever_node(STATE, CFG)
 
     assert result["retrieval_depth_used"] == 3
@@ -39,17 +46,24 @@ def test_retriever_stops_immediately_when_relevant():
 
 
 def test_retriever_widens_once_then_stops():
-    fake = FakeListChatModel(responses=[
-        json.dumps({"action": "widen", "reason": "not enough context"}),
-        json.dumps({"action": "stop", "reason": "good now"}),
-    ])
+    fake = FakeListChatModel(
+        responses=[
+            json.dumps({"action": "widen", "reason": "not enough context"}),
+            json.dumps({"action": "stop", "reason": "good now"}),
+        ]
+    )
     widened_candidates = [
         *INITIAL_CANDIDATES,
         {"id": 2, "branch": "fix/login-bug", "title": "Fix login", "body": "..."},
     ]
-    with patch("gitscribe.core.retriever.build_chat_model", return_value=fake), \
-         patch("gitscribe.core.retriever.memory.fetch_prs_by_branch_prefix", return_value=INITIAL_CANDIDATES), \
-         patch("gitscribe.core.retriever.memory.fetch_recent_prs", return_value=widened_candidates):
+    with (
+        patch("gitscribe.core.retriever.build_chat_model", return_value=fake),
+        patch(
+            "gitscribe.core.retriever.memory.fetch_prs_by_branch_prefix",
+            return_value=INITIAL_CANDIDATES,
+        ),
+        patch("gitscribe.core.retriever.memory.fetch_recent_prs", return_value=widened_candidates),
+    ):
         result = retriever_node(STATE, CFG)
 
     assert result["retrieval_depth_used"] == 6  # min_n(3) + min_n(3)
@@ -59,12 +73,20 @@ def test_retriever_widens_once_then_stops():
 
 def test_retriever_respects_max_prs_ceiling():
     """Widen requests beyond max_n should stop growing depth."""
-    fake = FakeListChatModel(responses=[
-        json.dumps({"action": "widen", "reason": "still not enough"}),
-    ] * 5)
-    with patch("gitscribe.core.retriever.build_chat_model", return_value=fake), \
-         patch("gitscribe.core.retriever.memory.fetch_prs_by_branch_prefix", return_value=INITIAL_CANDIDATES), \
-         patch("gitscribe.core.retriever.memory.fetch_recent_prs", return_value=INITIAL_CANDIDATES):
+    fake = FakeListChatModel(
+        responses=[
+            json.dumps({"action": "widen", "reason": "still not enough"}),
+        ]
+        * 5
+    )
+    with (
+        patch("gitscribe.core.retriever.build_chat_model", return_value=fake),
+        patch(
+            "gitscribe.core.retriever.memory.fetch_prs_by_branch_prefix",
+            return_value=INITIAL_CANDIDATES,
+        ),
+        patch("gitscribe.core.retriever.memory.fetch_recent_prs", return_value=INITIAL_CANDIDATES),
+    ):
         result = retriever_node(STATE, CFG)
 
     # max_iterations=2 hard-bounds the loop regardless of max_prs
@@ -78,7 +100,10 @@ def test_retriever_skips_llm_when_no_room_to_widen():
     disabling risk classification no longer silently disables retrieval's
     own widening logic too)."""
     cfg = {**CFG, "retrieval": {"min_prs": 3, "max_prs": 3}}
-    with patch("gitscribe.core.retriever.memory.fetch_prs_by_branch_prefix", return_value=INITIAL_CANDIDATES):
+    with patch(
+        "gitscribe.core.retriever.memory.fetch_prs_by_branch_prefix",
+        return_value=INITIAL_CANDIDATES,
+    ):
         result = retriever_node(STATE, cfg)
 
     assert result["retrieved_prs"] == INITIAL_CANDIDATES
@@ -89,9 +114,16 @@ def test_retriever_widens_regardless_of_risk_classifier_flag():
     """Disabling risk_classifier must not silently disable retrieval's own
     adaptive widening - the two features are unrelated."""
     cfg = {**CFG, "risk_classifier": {"enabled": False}}
-    fake = FakeListChatModel(responses=[json.dumps({"action": "stop", "reason": "relevant enough"})])
-    with patch("gitscribe.core.retriever.build_chat_model", return_value=fake), \
-         patch("gitscribe.core.retriever.memory.fetch_prs_by_branch_prefix", return_value=INITIAL_CANDIDATES):
+    fake = FakeListChatModel(
+        responses=[json.dumps({"action": "stop", "reason": "relevant enough"})]
+    )
+    with (
+        patch("gitscribe.core.retriever.build_chat_model", return_value=fake),
+        patch(
+            "gitscribe.core.retriever.memory.fetch_prs_by_branch_prefix",
+            return_value=INITIAL_CANDIDATES,
+        ),
+    ):
         result = retriever_node(STATE, cfg)
 
     assert result["retrieval_stopped_reason"] == "relevant enough"
@@ -99,8 +131,13 @@ def test_retriever_widens_regardless_of_risk_classifier_flag():
 
 def test_retriever_fails_open_on_classifier_error():
     fake = FakeListChatModel(responses=["not valid json"])
-    with patch("gitscribe.core.retriever.build_chat_model", return_value=fake), \
-         patch("gitscribe.core.retriever.memory.fetch_prs_by_branch_prefix", return_value=INITIAL_CANDIDATES):
+    with (
+        patch("gitscribe.core.retriever.build_chat_model", return_value=fake),
+        patch(
+            "gitscribe.core.retriever.memory.fetch_prs_by_branch_prefix",
+            return_value=INITIAL_CANDIDATES,
+        ),
+    ):
         result = retriever_node(STATE, CFG)
 
     assert result["retrieval_stopped_reason"] == "classifier_error_fail_open"

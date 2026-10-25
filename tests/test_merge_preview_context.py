@@ -27,7 +27,10 @@ def test_branch_intent_returns_titles_and_summaries_from_memory():
         {"title": "Add auth", "body": "Adds login endpoint"},
         {"title": "Fix auth bug", "body": "Fixes token expiry"},
     ]
-    with patch("gitscribe.core.merge_preview.context.memory.fetch_prs_by_branch_prefix", return_value=fake_prs):
+    with patch(
+        "gitscribe.core.merge_preview.context.memory.fetch_prs_by_branch_prefix",
+        return_value=fake_prs,
+    ):
         intent = _branch_intent("feature/auth")
 
     assert intent.branch == "feature/auth"
@@ -36,7 +39,9 @@ def test_branch_intent_returns_titles_and_summaries_from_memory():
 
 
 def test_branch_intent_empty_history_is_not_an_error():
-    with patch("gitscribe.core.merge_preview.context.memory.fetch_prs_by_branch_prefix", return_value=[]):
+    with patch(
+        "gitscribe.core.merge_preview.context.memory.fetch_prs_by_branch_prefix", return_value=[]
+    ):
         intent = _branch_intent("brand-new-branch")
 
     assert intent.has_history is False
@@ -57,12 +62,20 @@ def test_branch_intent_swallows_memory_lookup_failure():
 
 
 def test_blast_radius_summary_returns_symbol_and_related():
-    symbol = SearchResult(symbol_id=1, name="process", kind="function", file="app.py", lineno=10, score=0.0)
+    symbol = SearchResult(
+        symbol_id=1, name="process", kind="function", file="app.py", lineno=10, score=0.0
+    )
     related = [
-        BlastRadiusResult(symbol_id=2, name="helper", file="app.py", depth=1, direction="callee", lineno=20),
+        BlastRadiusResult(
+            symbol_id=2, name="helper", file="app.py", depth=1, direction="callee", lineno=20
+        ),
     ]
-    with patch("gitscribe.core.merge_preview.context.index_store.symbol_at", return_value=symbol), \
-         patch("gitscribe.core.merge_preview.context.index_store.blast_radius", return_value=related):
+    with (
+        patch("gitscribe.core.merge_preview.context.index_store.symbol_at", return_value=symbol),
+        patch(
+            "gitscribe.core.merge_preview.context.index_store.blast_radius", return_value=related
+        ),
+    ):
         name, summary = _blast_radius_summary("app.py", 10, max_depth=2)
 
     assert name == "process"
@@ -92,10 +105,17 @@ def test_blast_radius_summary_swallows_index_lookup_failure():
 
 
 def test_gather_context_assembles_full_hunk_context():
-    symbol = SearchResult(symbol_id=1, name="process", kind="function", file="app.py", lineno=10, score=0.0)
-    with patch("gitscribe.core.merge_preview.context.index_store.symbol_at", return_value=symbol), \
-         patch("gitscribe.core.merge_preview.context.index_store.blast_radius", return_value=[]), \
-         patch("gitscribe.core.merge_preview.context.memory.fetch_prs_by_branch_prefix", return_value=[]):
+    symbol = SearchResult(
+        symbol_id=1, name="process", kind="function", file="app.py", lineno=10, score=0.0
+    )
+    with (
+        patch("gitscribe.core.merge_preview.context.index_store.symbol_at", return_value=symbol),
+        patch("gitscribe.core.merge_preview.context.index_store.blast_radius", return_value=[]),
+        patch(
+            "gitscribe.core.merge_preview.context.memory.fetch_prs_by_branch_prefix",
+            return_value=[],
+        ),
+    ):
         ctx = gather_context(HUNK, CFG, ours_branch="main", theirs_branch="feature/x")
 
     assert ctx.hunk == HUNK
@@ -106,22 +126,37 @@ def test_gather_context_assembles_full_hunk_context():
 
 def test_gather_context_uses_default_blast_radius_depth_when_unconfigured():
     """cfg without a merge_preview section shouldn't raise a KeyError."""
-    with patch("gitscribe.core.merge_preview.context.index_store.symbol_at", return_value=None), \
-         patch("gitscribe.core.merge_preview.context.memory.fetch_prs_by_branch_prefix", return_value=[]):
+    with (
+        patch("gitscribe.core.merge_preview.context.index_store.symbol_at", return_value=None),
+        patch(
+            "gitscribe.core.merge_preview.context.memory.fetch_prs_by_branch_prefix",
+            return_value=[],
+        ),
+    ):
         ctx = gather_context(HUNK, {}, ours_branch="main", theirs_branch="feature/x")
 
     assert ctx.symbol_name is None
 
 
 def test_hunk_context_as_prompt_block_includes_all_populated_fields():
-    symbol = SearchResult(symbol_id=1, name="process", kind="function", file="app.py", lineno=10, score=0.0)
-    related = [BlastRadiusResult(symbol_id=2, name="helper", file="app.py", depth=1, direction="callee", lineno=20)]
-    with patch("gitscribe.core.merge_preview.context.index_store.symbol_at", return_value=symbol), \
-         patch("gitscribe.core.merge_preview.context.index_store.blast_radius", return_value=related), \
-         patch(
-             "gitscribe.core.merge_preview.context.memory.fetch_prs_by_branch_prefix",
-             return_value=[{"title": "Refactor process()", "body": "..."}],
-         ):
+    symbol = SearchResult(
+        symbol_id=1, name="process", kind="function", file="app.py", lineno=10, score=0.0
+    )
+    related = [
+        BlastRadiusResult(
+            symbol_id=2, name="helper", file="app.py", depth=1, direction="callee", lineno=20
+        )
+    ]
+    with (
+        patch("gitscribe.core.merge_preview.context.index_store.symbol_at", return_value=symbol),
+        patch(
+            "gitscribe.core.merge_preview.context.index_store.blast_radius", return_value=related
+        ),
+        patch(
+            "gitscribe.core.merge_preview.context.memory.fetch_prs_by_branch_prefix",
+            return_value=[{"title": "Refactor process()", "body": "..."}],
+        ),
+    ):
         ctx = gather_context(HUNK, CFG, ours_branch="main", theirs_branch="feature/x")
 
     block = ctx.as_prompt_block()

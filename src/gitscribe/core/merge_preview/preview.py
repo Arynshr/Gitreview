@@ -34,8 +34,12 @@ def run_merge_preview(
         conflicted = attempt_merge(worktree_path, theirs_branch)
 
         if not conflicted:
-            logger.info("merge preview clean: no conflicts between %s and %s", ours_branch, theirs_branch)
-            return MergePreviewReport(ours_branch=ours_branch, theirs_branch=theirs_branch, clean=True)
+            logger.info(
+                "merge preview clean: no conflicts between %s and %s", ours_branch, theirs_branch
+            )
+            return MergePreviewReport(
+                ours_branch=ours_branch, theirs_branch=theirs_branch, clean=True
+            )
 
         file_reports: list[FileReport] = []
         for file in conflicted:
@@ -44,7 +48,9 @@ def run_merge_preview(
                 # Binary file conflict, or a file we couldn't read/parse -
                 # still worth surfacing to the user, just with no proposed
                 # resolution to show.
-                logger.info("no parseable text hunks in conflicted file %s (binary or unreadable)", file)
+                logger.info(
+                    "no parseable text hunks in conflicted file %s (binary or unreadable)", file
+                )
                 file_reports.append(FileReport(file=file, resolutions=[]))
                 continue
 
@@ -56,6 +62,8 @@ def run_merge_preview(
     )
     logger.info(
         "merge preview finished: %d file(s), %d hunk(s), %d high-confidence",
-        len(report.files), report.total_hunks, report.total_safe,
+        len(report.files),
+        report.total_hunks,
+        report.total_safe,
     )
     return report

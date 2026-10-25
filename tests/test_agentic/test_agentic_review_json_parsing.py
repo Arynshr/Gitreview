@@ -12,8 +12,10 @@ import ast
 import json
 from pathlib import Path
 
-GEN_PATH = Path(__file__).parent.parent / "src" / "gitscribe" / "core" / "generator.py"
-RAG_PATH = Path(__file__).parent.parent / "src" / "gitscribe" / "core" / "analysis" / "rag.py"
+GEN_PATH = Path(__file__).resolve().parents[2] / "src" / "gitscribe" / "core" / "generator.py"
+RAG_PATH = (
+    Path(__file__).resolve().parents[2] / "src" / "gitscribe" / "core" / "analysis" / "rag.py"
+)
 
 
 def _load_extract_json_block():
@@ -35,7 +37,7 @@ EXTRACT_CASES = [
     ("code fence wrapped", '```json\n{"findings": [{"a":1}]}\n```', True),
     (
         "prose with an unrelated brace before AND after the real JSON",
-        'I will check for issues using patterns like {TODO, FIXME} markers.\n\n'
+        "I will check for issues using patterns like {TODO, FIXME} markers.\n\n"
         '```json\n{"findings": [{"severity": "warning", "rule_or_reason": "x", '
         '"message": "y", "line_start": 1, "line_end": 1}]}\n```\n\n'
         "Let me know if you want detail on any finding{s}.",
@@ -67,7 +69,9 @@ def test_extract_json_block_handles_prose_with_extra_braces():
             parsed = True
         except ValueError:
             parsed = False
-        assert parsed == should_parse, f"case {name!r}: expected parsed={should_parse}, got {parsed}"
+        assert parsed == should_parse, (
+            f"case {name!r}: expected parsed={should_parse}, got {parsed}"
+        )
 
 
 def test_extract_json_block_skips_invalid_candidate_for_valid_one():
@@ -88,7 +92,8 @@ def test_run_batched_agentic_review_isolates_batch_failures():
     src = RAG_PATH.read_text()
     tree = ast.parse(src)
     func = next(
-        n for n in ast.walk(tree)
+        n
+        for n in ast.walk(tree)
         if isinstance(n, ast.FunctionDef) and n.name == "run_batched_agentic_review"
     )
     func_src = ast.get_source_segment(src, func)
@@ -97,5 +102,5 @@ def test_run_batched_agentic_review_isolates_batch_failures():
     # try/except within the loop, not bare calls that can propagate.
     assert "try:" in func_src and "except Exception" in func_src
     # Sanity: still calls both paths (single-file fallback + batch call)
-    assert "run_agentic_review(diff_text, symbol_ids, cfg)" in func_src
-    assert "_run_batch_call(batch, cfg)" in func_src
+    assert "run_agentic_review(diff_text, symbol_ids, cfg" in func_src  # + sandboxed= kwarg
+    assert "_run_batch_call(batch, cfg" in func_src  # + sandboxed= kwarg

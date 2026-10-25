@@ -62,20 +62,28 @@ class HunkContext(BaseModel):
         if self.blast_radius_summary:
             lines.append("Blast radius: " + "; ".join(self.blast_radius_summary))
         if self.ours_intent.has_history:
-            lines.append(f"'{self.ours_intent.branch}' branch intent (past PRs): "
-                          + "; ".join(self.ours_intent.pr_titles))
+            lines.append(
+                f"'{self.ours_intent.branch}' branch intent (past PRs): "
+                + "; ".join(self.ours_intent.pr_titles)
+            )
         if self.theirs_intent.has_history:
-            lines.append(f"'{self.theirs_intent.branch}' branch intent (past PRs): "
-                          + "; ".join(self.theirs_intent.pr_titles))
+            lines.append(
+                f"'{self.theirs_intent.branch}' branch intent (past PRs): "
+                + "; ".join(self.theirs_intent.pr_titles)
+            )
         return "\n".join(lines)
 
 
 class HunkResolution(BaseModel):
     hunk_index: int
-    resolved_text: str = Field(description="The proposed merged content for this hunk, no conflict markers")
+    resolved_text: str = Field(
+        description="The proposed merged content for this hunk, no conflict markers"
+    )
     rationale: str = Field(description="Why this resolution preserves both branches' intent")
     confidence: Confidence
-    escalated: bool = False  # True if this result came from per-hunk re-resolution, not the batch pass
+    escalated: bool = (
+        False  # True if this result came from per-hunk re-resolution, not the batch pass
+    )
 
 
 class FileReport(BaseModel):

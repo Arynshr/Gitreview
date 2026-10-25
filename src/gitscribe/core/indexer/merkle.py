@@ -69,9 +69,7 @@ def diff_against_stored(conn: sqlite3.Connection, current: dict[str, str]) -> Ha
 
 
 def get_last_root_hash(conn: sqlite3.Connection) -> str | None:
-    row = conn.execute(
-        "SELECT root_hash FROM index_runs ORDER BY id DESC LIMIT 1"
-    ).fetchone()
+    row = conn.execute("SELECT root_hash FROM index_runs ORDER BY id DESC LIMIT 1").fetchone()
     return row["root_hash"] if row else None
 
 

@@ -3,6 +3,7 @@ Agentic node #2: adaptive retrieval depth.
 Fixed 'last N PRs' fails on monorepos (irrelevant noise) and sparse repos
 (over-fetch nothing). Agent inspects candidates and decides stop/widen.
 """
+
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -48,11 +49,13 @@ def retriever_node(state: GitScribeState, cfg: dict) -> dict:
         max_iterations = 2
         for i in range(max_iterations):
             try:
-                decision = chain.invoke({
-                    "branch": branch,
-                    "change_summary": state.change_summary,
-                    "candidates": candidates,
-                })
+                decision = chain.invoke(
+                    {
+                        "branch": branch,
+                        "change_summary": state.change_summary,
+                        "candidates": candidates,
+                    }
+                )
             except Exception:
                 stopped_reason = "classifier_error_fail_open"
                 break

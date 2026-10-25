@@ -1,7 +1,7 @@
 """
 core/merge_preview/hunk_parser.py
 Pure, dependency-free parsing of git's conflict markers into structured
-ConflictHunk objects. 
+ConflictHunk objects.
 """
 
 from __future__ import annotations
@@ -58,7 +58,9 @@ def parse_conflicts(content: str, file: str) -> list[ConflictHunk]:
 
         if m_ours:
             if state != "outside":
-                raise ConflictParseError(f"{file}:{i}: nested '<<<<<<<' before previous hunk closed")
+                raise ConflictParseError(
+                    f"{file}:{i}: nested '<<<<<<<' before previous hunk closed"
+                )
             state, ours_label, start_line = "ours", m_ours.group(1).strip(), i
             _reset()
             continue
@@ -74,17 +76,19 @@ def parse_conflicts(content: str, file: str) -> list[ConflictHunk]:
         if m_theirs:
             if state != "theirs":
                 raise ConflictParseError(f"{file}:{i}: '>>>>>>>' without a matching '======='")
-            hunks.append(ConflictHunk(
-                file=file,
-                hunk_index=len(hunks),
-                start_line=start_line,
-                end_line=i,
-                ours_label=ours_label,
-                theirs_label=m_theirs.group(1).strip(),
-                ours_text="\n".join(ours_buf),
-                theirs_text="\n".join(theirs_buf),
-                base_text="\n".join(base_buf) if saw_base_marker else None,
-            ))
+            hunks.append(
+                ConflictHunk(
+                    file=file,
+                    hunk_index=len(hunks),
+                    start_line=start_line,
+                    end_line=i,
+                    ours_label=ours_label,
+                    theirs_label=m_theirs.group(1).strip(),
+                    ours_text="\n".join(ours_buf),
+                    theirs_text="\n".join(theirs_buf),
+                    base_text="\n".join(base_buf) if saw_base_marker else None,
+                )
+            )
             state = "outside"
             continue
 
@@ -101,7 +105,9 @@ def parse_conflicts(content: str, file: str) -> list[ConflictHunk]:
     return hunks
 
 
-def hunks_for_file(worktree_path: Path, file: str, base_ref: str, theirs_branch: str) -> list[ConflictHunk]:
+def hunks_for_file(
+    worktree_path: Path, file: str, base_ref: str, theirs_branch: str
+) -> list[ConflictHunk]:
     """Reads the conflicted file out of the worktree, parses it, and fills
     in `base_text` from the real merge-base blob when the in-file markers
     didn't already carry one (i.e. `merge.conflictStyle` isn't `diff3`).

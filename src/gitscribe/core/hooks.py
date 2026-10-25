@@ -16,7 +16,7 @@ COMMIT_RE = re.compile(
     r"^(?P<type>feat|fix|build|chore|ci|docs|style|refactor|perf|test)"
     r"(?:\((?P<scope>[a-z0-9_-]+)\))?"
     r"(?P<breaking>!)?: "
-    r"(?P<desc>[a-z].{0,70}[^.\n])$"
+    r"(?P<desc>[a-z].{0,98})$"
 )
 BREAKING_FOOTER_RE = re.compile(r"^BREAKING CHANGE: .+", re.MULTILINE)
 
@@ -44,6 +44,43 @@ def get_cached_risk(cfg: dict, base: str, head: str) -> dict:
     cache_file.write_text(json.dumps(result))
     return result
 
+
+def _clean_working_tree() -> bool:
+    """True only when there are no uncommitted changes (staged or not).
+
+    `gitscribe verify`'s deterministic/AI passes read file *content*
+    directly off disk (Path.is_file()/read_text()), not from git blobs at
+    `head` - unlike risk_classifier_node above, which only ever looks at
+    diff text and commit messages. That means a validation result cached
+    by (base, head) is only sound when the working tree provably matches
+    what's committed at head; otherwise a stale PASS could survive a local
+    edit that introduced a real problem. Gating both cache reads and
+    writes on this keeps the cache correct at the cost of only ever
+    caching runs against a clean tree (the common case for CI checkouts
+    and hook-triggered runs; ad hoc `gitscribe verify` while mid-edit
+    correctly always re-validates instead of trusting a stale result).
+    """
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0 and not result.stdout.strip()
+
+
+def _validation_cache_key(cfg: dict, base: str, head: str, *extra: object) -> str:
+    diff_key, _raw = _diff_cache_key(base, head)
+    # Gate behavior depends on cfg (fail_on, file_rules, model, ...) and on
+    # the sandboxed/force_ai flags a given `verify` invocation was run
+    # with, not just the diff - all of that must invalidate the cache the
+    # same way a new commit does, or a cached result from a differently
+    # configured run could be served back incorrectly.
+    payload = json.dumps({"cfg": cfg, "extra": extra}, sort_keys=True, default=str)
+    cfg_digest = hashlib.sha1(payload.encode()).hexdigest()[:16]
+    return f"validation-{diff_key}-{cfg_digest}"
+
+
 def bump_for_commit(subject: str, body: str) -> str:
     m = COMMIT_RE.match(subject)
     if not m:
@@ -60,9 +97,12 @@ def max_bump(bumps: list[str]) -> str:
 
 
 def next_tag(bump: str) -> str:
-    last = subprocess.run(
-        ["git", "describe", "--tags", "--abbrev=0"], capture_output=True, text=True
-    ).stdout.strip() or "v0.0.0"
+    last = (
+        subprocess.run(
+            ["git", "describe", "--tags", "--abbrev=0"], capture_output=True, text=True
+        ).stdout.strip()
+        or "v0.0.0"
+    )
     major, minor, patch = (int(x) for x in last.lstrip("v").split("."))
     if bump == "major":
         return f"v{major + 1}.0.0"
@@ -77,6 +117,8 @@ def conflicted_files(cwd: str | Path | None = None) -> list[str]:
     """
     result = subprocess.run(
         ["git", "diff", "--diff-filter=U", "--name-only"],
-        capture_output=True, text=True, cwd=cwd,
+        capture_output=True,
+        text=True,
+        cwd=cwd,
     )
     return [f for f in result.stdout.splitlines() if f]

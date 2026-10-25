@@ -86,6 +86,7 @@ def severity_score(findings: list[LintFinding]) -> float:
     errors = sum(1 for f in findings if f.severity == "error")
     return errors / len(findings)
 
+
 def _symbol_id_for(conn, file: str, lineno: int) -> int | None:
     """Line-range containment lookup — smallest enclosing symbol wins
     (e.g. a method inside a class)"""
@@ -118,12 +119,14 @@ def write_lint_findings(findings: list[LintFinding]) -> int:
     conn.commit()
     return len(findings)
 
+
 def run_lint_review(repo_root: str = ".") -> int:
     """Entry point for `gitscribe review --lint-only`:
     deterministic, no LLM call, runs regardless of Merkle skip state.
     """
     findings = run_ruff(repo_root)
     return write_lint_findings(findings)
+
 
 def _normalize_path(file: str) -> str:
     """ruff --output-format=json reports absolute paths; symbols.file is

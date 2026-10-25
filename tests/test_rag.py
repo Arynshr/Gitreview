@@ -5,7 +5,9 @@ from gitscribe.core.indexer.index_store import BlastRadiusResult, SearchResult
 
 
 def make_search_result(sid, name, file="a.py", lineno=1, score=0.9):
-    return SearchResult(symbol_id=sid, name=name, kind="function", file=file, lineno=lineno, score=score)
+    return SearchResult(
+        symbol_id=sid, name=name, kind="function", file=file, lineno=lineno, score=score
+    )
 
 
 def make_blast_result(sid, name, file="a.py", depth=1, direction="callee"):
@@ -102,7 +104,9 @@ def test_as_prompt_block_formats_query_and_snippets():
         query="how does auth work",
         snippets=[
             ContextSnippet(symbol_id=1, name="login", file="auth.py", lineno=10, relation="match"),
-            ContextSnippet(symbol_id=2, name="hash_pw", file="auth.py", lineno=20, relation="callee"),
+            ContextSnippet(
+                symbol_id=2, name="hash_pw", file="auth.py", lineno=20, relation="callee"
+            ),
         ],
     )
     block = ctx.as_prompt_block()

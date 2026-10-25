@@ -6,7 +6,12 @@ context.
 
 from __future__ import annotations
 
+import json
 import time
+import types
+import urllib.error
+import urllib.parse
+import urllib.request
 
 from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel, Field
@@ -51,7 +56,9 @@ def retrieve(query: str, cfg: dict, top_k: int = 5, expand_depth: int = 1) -> RA
             continue
         seen_ids.add(m.symbol_id)
         snippets.append(
-            ContextSnippet(symbol_id=m.symbol_id, name=m.name, file=m.file, lineno=m.lineno, relation="match")
+            ContextSnippet(
+                symbol_id=m.symbol_id, name=m.name, file=m.file, lineno=m.lineno, relation="match"
+            )
         )
 
         for related in blast_radius(m.symbol_id, max_depth=expand_depth):
@@ -98,11 +105,117 @@ def answer_query(query: str, context: RAGContext, cfg: dict):
     response = model.invoke(prompt)
     return response.content
 
+
 _TOKENS_PER_CHAR = 0.25  # rough estimate; good enough for a hard budget cap
 
 
 def _estimate_tokens(text: str) -> int:
     return int(len(text) * _TOKENS_PER_CHAR)
+
+
+class _SandboxedReviewError(RuntimeError):
+    pass
+
+
+class _SandboxedChatModel:
+    """Minimal `.invoke(prompt) -> obj.content` shim around the local,
+    loopback-only llama.cpp server used by the validation layer
+    (gitscribe/validation/ai.py) — same request shape and same
+    localhost-only enforcement, reimplemented narrowly here rather than
+    imported so that `core/analysis` doesn't take a hard dependency on
+    `validation`'s review internals (only its config loader is reused,
+    see `_sandboxed_ai_config` below).
+
+    Exists purely so `run_agentic_review`/`_run_batch_call` can swap this
+    in for `build_chat_model(...)` without changing their own call sites
+    or retry logic at all.
+    """
+
+    def __init__(self, ai_cfg: dict) -> None:
+        self._ai_cfg = ai_cfg
+
+    def invoke(self, prompt: str) -> types.SimpleNamespace:
+        import os
+
+        parsed = urllib.parse.urlparse(str(self._ai_cfg.get("base_url", "http://127.0.0.1:8080")))
+        if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}:
+            raise _SandboxedReviewError(
+                "sandboxed agentic review endpoint must be local HTTP on localhost/127.0.0.1"
+            )
+        base_url = str(self._ai_cfg.get("base_url", "http://127.0.0.1:8080")).rstrip("/")
+
+        payload = {
+            "model": str(self._ai_cfg.get("model", "qwen2.5-coder-3b-instruct-q4_k_m")),
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False,
+            "temperature": 0.1,
+            "max_tokens": int(self._ai_cfg.get("max_output_tokens", 1200)),
+        }
+
+        headers = {"Content-Type": "application/json"}
+        api_key_env = str(self._ai_cfg.get("api_key_env", "VALIDATION_API_KEY"))
+        api_key = os.environ.get(api_key_env)
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        request = urllib.request.Request(
+            f"{base_url}/v1/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(
+                request, timeout=float(self._ai_cfg.get("timeout_seconds", 120))
+            ) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+            raise _SandboxedReviewError(f"sandboxed agentic review failed: {exc}") from exc
+
+        choices = body.get("choices") or [{}]
+        content = choices[0].get("message", {}).get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise _SandboxedReviewError("sandboxed agentic review returned no content")
+
+        return types.SimpleNamespace(content=content)
+
+
+def _sandboxed_ai_config(cfg: dict) -> dict:
+    """Reuses validation/config.py's already-battle-tested loader for the
+    local llama.cpp settings (base_url/model/api_key_env) instead of
+    duplicating that config surface here. Imported lazily, and only on
+    the opt-in sandboxed path, so legacy agentic review never depends on
+    `validation` being present or correctly configured.
+
+    `timeout_seconds` is overridable separately via
+    `review.agentic.sandboxed_timeout_seconds`: validation.ai's timeout
+    is tuned for a single-diff security review, but this path batches
+    several files into one prompt and can legitimately take much longer
+    on CPU inference — reusing the same budget for both is wrong.
+    """
+    from gitscribe.config_locator import find_config_path
+    from gitscribe.validation.config import load_validation_config
+
+    ai_cfg = dict(load_validation_config(find_config_path())["ai"])
+
+    override = cfg.get("review", {}).get("agentic", {}).get("sandboxed_timeout_seconds")
+    if override:
+        ai_cfg["timeout_seconds"] = override
+
+    return ai_cfg
+
+
+def _build_llm(cfg: dict, model_name: str, temperature: float, sandboxed: bool):
+    if sandboxed:
+        # A single local model backs the sandboxed path — there is no
+        # separate "fallback" local model to escalate to on bad_output,
+        # unlike the cloud model_name/fallback_model pair below.
+        return _SandboxedChatModel(_sandboxed_ai_config(cfg))
+
+    from gitscribe.core.llm_client import build_chat_model
+
+    return build_chat_model(cfg, model_name, temperature=temperature)
 
 
 class ReviewFindingLLM(BaseModel):
@@ -168,7 +281,11 @@ def _assemble_review_context(
     blocks = {"callers_block": "", "callees_block": "", "siblings_block": ""}
 
     # Priority: callers, then callees, then siblings — truncate siblings first.
-    for key, items in (("callers_block", callers), ("callees_block", callees), ("siblings_block", siblings)):
+    for key, items in (
+        ("callers_block", callers),
+        ("callees_block", callees),
+        ("siblings_block", siblings),
+    ):
         text = "\n".join(items) or "(none)"
         cost = _estimate_tokens(text)
         if cost > budget:
@@ -188,13 +305,16 @@ def run_agentic_review(
     diff_hunk: str,
     changed_symbol_ids: list[int],
     cfg: dict,
+    sandboxed: bool = False,
 ) -> list[ReviewFindingLLM]:
     """Runs the agentic review pass. Retries are routed through
     failure_router.classify_failure instead of a second failure path, per
     the spec's explicit constraint.
-    """
-    from gitscribe.core.llm_client import build_chat_model
 
+    `sandboxed=True` routes this call through the local, loopback-only
+    llama.cpp server instead of the cloud BYOK provider. Default is
+    False: unchanged behavior, unchanged call path.
+    """
     review_cfg = cfg.get("review", {}).get("agentic", {})
     hops = review_cfg.get("hops", 2)
     max_context_tokens = review_cfg.get("max_context_tokens", 8000)
@@ -203,7 +323,9 @@ def run_agentic_review(
     diff_budget = int(max_context_tokens * 0.6)  # leave room for context + prompt scaffolding
     if _estimate_tokens(diff_hunk) > diff_budget:
         max_chars = int(diff_budget / _TOKENS_PER_CHAR)
-        diff_hunk = diff_hunk[:max_chars] + "\n[... diff truncated, exceeded per-call token budget ...]"
+        diff_hunk = (
+            diff_hunk[:max_chars] + "\n[... diff truncated, exceeded per-call token budget ...]"
+        )
 
     context = _assemble_review_context(diff_hunk, changed_symbol_ids, hops, max_context_tokens)
     prompt = _REVIEW_PROMPT.format(
@@ -221,10 +343,11 @@ def run_agentic_review(
         # bad_output on the previous attempt switches to fallback_model
         # (mirrors graph.py's retry_fallback_model_node) instead of
         # retrying the same model against the same malformed-output
-        # failure, which rarely helps.
+        # failure, which rarely helps. Not meaningful when sandboxed —
+        # there's only one local model — so it's a no-op there.
         current_model = fallback_model if failure_type == "bad_output" else model_name
         try:
-            llm = build_chat_model(cfg, current_model, temperature=0.1)
+            llm = _build_llm(cfg, current_model, temperature=0.1, sandboxed=sandboxed)
             ai_msg = llm.invoke(prompt)
             cleaned = _extract_json_block(ai_msg.content)
             parsed: ReviewFindingsLLM = _REVIEW_PARSER.invoke(cleaned)
@@ -313,12 +436,37 @@ def _light_context_block(changed_symbol_ids: list[int], hops: int) -> str:
     return ", ".join(names[:15]) if names else "(none)"
 
 
+def _reserved_prompt_overhead(cfg: dict, sandboxed: bool) -> int:
+    """Static prompt template + format_instructions cost, plus the
+    response token budget for whichever path is active. Both were
+    previously unaccounted for in `_pack_into_batches`, which only
+    budgeted per-file diff size — so a batch could be "packed" within
+    max_context_tokens and still exceed the server's real context
+    window once the shared template and the model's own response were
+    added on top.
+    """
+    static_overhead = _estimate_tokens(_BATCH_REVIEW_PROMPT) + _estimate_tokens(
+        _BATCH_REVIEW_PARSER.get_format_instructions()
+    )
+
+    if sandboxed:
+        response_budget = int(_sandboxed_ai_config(cfg).get("max_output_tokens", 1200))
+    else:
+        response_budget = int(cfg.get("llm", {}).get("max_tokens", 1000))
+
+    return static_overhead + response_budget
+
+
 def _pack_into_batches(
     items: list[tuple[str, str, list[int]]], max_tokens: int
 ) -> list[list[tuple[str, str, list[int]]]]:
     """Greedy bin-packing by estimated token size. `items` is
     (file, diff_text, symbol_ids). Oversized single items go in their own
     batch and get truncated later by the per-file fallback, not dropped.
+
+    `max_tokens` here is expected to already be the *effective* budget
+    (max_context_tokens minus `_reserved_prompt_overhead`), not the raw
+    context window — callers reserve headroom before calling this.
     """
     batches: list[list[tuple[str, str, list[int]]]] = []
     current: list[tuple[str, str, list[int]]] = []
@@ -338,10 +486,8 @@ def _pack_into_batches(
 
 
 def _run_batch_call(
-    batch: list[tuple[str, str, list[int]]], cfg: dict
+    batch: list[tuple[str, str, list[int]]], cfg: dict, sandboxed: bool = False
 ) -> list[_BatchReviewFindingLLM]:
-    from gitscribe.core.llm_client import build_chat_model
-
     review_cfg = cfg.get("review", {}).get("agentic", {})
     hops = review_cfg.get("hops", 2)
     max_retries = cfg.get("failure_handling", {}).get("max_retries", 2)
@@ -365,7 +511,7 @@ def _run_batch_call(
     for attempt in range(max_retries + 1):
         current_model = fallback_model if failure_type == "bad_output" else model_name
         try:
-            llm = build_chat_model(cfg, current_model, temperature=0.1)
+            llm = _build_llm(cfg, current_model, temperature=0.1, sandboxed=sandboxed)
             ai_msg = llm.invoke(prompt)
             cleaned = _extract_json_block(ai_msg.content)
             parsed: _BatchReviewResponse = _BATCH_REVIEW_PARSER.invoke(cleaned)
@@ -383,18 +529,28 @@ def _run_batch_call(
 
 
 def run_batched_agentic_review(
-    per_file_diffs: dict[str, str], cfg: dict
+    per_file_diffs: dict[str, str], cfg: dict, sandboxed: bool = False
 ) -> tuple[dict[str, list[ReviewFindingLLM]], dict[str, int | None], set[str]]:
     """Top-level entry point: gate, then batch, then call. Returns
     (findings_by_file, anchor_symbol_by_file, reviewed_files) — the third
     value is which files actually passed the gate and went to the LLM,
     distinct from "went to the LLM and came back clean" (both look like
     an empty findings list otherwise, and callers reporting a skip count
-    need to tell those apart). 
+    need to tell those apart).
+
+    `sandboxed=True` routes every call below through the local llama.cpp
+    server (gitscribe.validation.config's settings) instead of the cloud
+    BYOK provider. Default False: identical behavior to before this flag
+    existed.
     """
     review_cfg = cfg.get("review", {}).get("agentic", {})
     max_context_tokens = review_cfg.get("max_context_tokens", 6000)
     min_blast_radius = review_cfg.get("min_blast_radius_for_review", None)
+
+    reserved = _reserved_prompt_overhead(cfg, sandboxed)
+    # Floor so a small max_context_tokens doesn't produce a zero/negative
+    # budget and silently pack nothing.
+    effective_budget = max(max_context_tokens - reserved, 500)
 
     candidates: list[tuple[str, str, list[int]]] = []
     anchors: dict[str, int | None] = {}
@@ -409,15 +565,15 @@ def run_batched_agentic_review(
     if not candidates:
         return results, anchors, reviewed_files
 
-    batches = _pack_into_batches(candidates, max_context_tokens)
+    batches = _pack_into_batches(candidates, effective_budget)
     for batch in batches:
-        if len(batch) == 1 and _estimate_tokens(batch[0][1]) > max_context_tokens:
+        if len(batch) == 1 and _estimate_tokens(batch[0][1]) > effective_budget:
             # too big to batch with anything else and too big on its own —
             # fall back to the single-file path, which truncates as a
             # last resort instead of failing the whole batch.
             file, diff_text, symbol_ids = batch[0]
             try:
-                results[file] = run_agentic_review(diff_text, symbol_ids, cfg)
+                results[file] = run_agentic_review(diff_text, symbol_ids, cfg, sandboxed=sandboxed)
             except Exception as exc:
                 logger.warning("agentic review failed for %s, skipping: %s", file, exc)
             continue
@@ -428,12 +584,14 @@ def run_batched_agentic_review(
         # so cli.py's broad `except Exception` around the whole call would
         # report 0 findings even when most batches had already succeeded.
         try:
-            findings = _run_batch_call(batch, cfg)
+            findings = _run_batch_call(batch, cfg, sandboxed=sandboxed)
         except Exception as exc:
             failed_files = [c[0] for c in batch]
             logger.warning(
                 "agentic review batch failed (%d file(s): %s), skipping: %s",
-                len(failed_files), ", ".join(failed_files), exc,
+                len(failed_files),
+                ", ".join(failed_files),
+                exc,
             )
             continue
 

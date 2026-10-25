@@ -1,29 +1,20 @@
 from __future__ import annotations
 
 import ast
-import json
-import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
+from gitscribe.validation.analysis.models import AnalysisScope
+from gitscribe.validation.analysis.runner import ScannerExecutionError, run_scanner_command
+from gitscribe.validation.analysis.scanners.betterleaks_scanner import BetterleaksScanner
+from gitscribe.validation.analysis.scanners.osv_scanner import OSVScanner
+from gitscribe.validation.analysis.scanners.ruff_scanner import RuffScanner
+from gitscribe.validation.analysis.scanners.semgrep_scanner import SemgrepScanner
 from gitscribe.validation.models import ChangeContext, Finding
 
 
 class DeterministicAnalysisError(RuntimeError):
     pass
-
-
-def _run(args: list[str]) -> subprocess.CompletedProcess[str]:
-    try:
-        return subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except FileNotFoundError as exc:
-        raise DeterministicAnalysisError(
-            f"required scanner not found: {args[0]}"
-        ) from exc
 
 
 def _path_traversal_findings(
@@ -102,10 +93,7 @@ def _path_traversal_findings(
             if not sink:
                 continue
 
-            if any(
-                isinstance(arg, ast.Name) and arg.id in tainted
-                for arg in node.args
-            ):
+            if any(isinstance(arg, ast.Name) and arg.id in tainted for arg in node.args):
                 findings.append(
                     Finding(
                         id=f"path-traversal:{file}:{node.lineno}",
@@ -133,192 +121,135 @@ def _path_traversal_findings(
                         sources=["gitscribe-path-check"],
                     )
                 )
-                break
+                # Deliberately no `break` here: each sink call site is a
+                # distinct location and is reported independently;
+                # aggregator.py dedupes by (file, line, category) if the
+                # same line somehow matches twice.
 
     return findings
+
+
+def _run_scanner_adapter(
+    scanner,
+    context: ChangeContext,
+    timeout_seconds: float,
+    extra_config: dict | None = None,
+) -> list[Finding]:
+    """Shared ChangeContext -> AnalysisScope shim for every Scanner
+    adapter (validation/analysis/scanner.py), so run_ruff()/run_semgrep()/
+    etc. stay one-line wrappers instead of each re-implementing this same
+    build/run/parse + error-translation sequence. ScannerExecutionError
+    (an analysis-layer concern) is translated to DeterministicAnalysisError
+    here so callers of this module - namely validation/orchestrator.py -
+    don't need to know the analysis layer exists. `extra_config` merges
+    in scanner-specific flags (e.g. BetterleaksScanner's
+    `betterleaks_live_validation`) that don't fit a single positional
+    param.
+    """
+    scope = AnalysisScope(files=context.files)
+
+    config = {"timeout_seconds": timeout_seconds, **(extra_config or {})}
+    command = scanner.build_command(scope, config)
+    if command is None:
+        return []
+
+    try:
+        result = run_scanner_command(command)
+    except ScannerExecutionError as exc:
+        raise DeterministicAnalysisError(str(exc)) from exc
+
+    try:
+        return scanner.parse(result, scope)
+    except ScannerExecutionError as exc:
+        raise DeterministicAnalysisError(str(exc)) from exc
 
 
 def run_ruff(
     context: ChangeContext,
+    timeout_seconds: float = 60,
 ) -> list[Finding]:
-    python_files = [
-        file
-        for file in context.files
-        if file.lower().endswith(".py")
-        and Path(file).is_file()
-    ]
-
-    if not python_files:
-        return []
-
-    result = _run(
-        [
-            "ruff",
-            "check",
-            "--output-format=json",
-            "--no-fix",
-            *python_files,
-        ]
-    )
-
-    if result.returncode not in (0, 1):
-        raise DeterministicAnalysisError(
-            "ruff failed: "
-            + (result.stderr.strip() or "no diagnostic output")
-        )
-
-    try:
-        raw = json.loads(result.stdout or "[]")
-    except json.JSONDecodeError as exc:
-        raise DeterministicAnalysisError(
-            "ruff returned malformed JSON"
-        ) from exc
-
-    findings: list[Finding] = []
-
-    for item in raw:
-        code = str(item.get("code") or "RUFF")
-
-        security = code.startswith("S")
-
-        if code in {"S105", "S106", "S107"}:
-            category = "secrets"
-        elif security:
-            category = "security"
-        else:
-            category = "validation"
-
-        findings.append(
-            Finding(
-                id=(
-                    f"ruff:{code}:"
-                    f"{item.get('filename')}:"
-                    f"{item.get('location', {}).get('row', 0)}"
-                ),
-                source="deterministic",
-                category=category,
-                rule_id=code,
-                severity="high" if security else "medium",
-                confidence="high",
-                file=item.get("filename"),
-                line=item.get("location", {}).get("row"),
-                message=item.get(
-                    "message",
-                    "Ruff finding",
-                ),
-                evidence=(
-                    f"Ruff rule {code} reported this location "
-                    "in the changed file."
-                ),
-                remediation=(
-                    "Review the reported rule and apply the "
-                    "recommended secure pattern."
-                ),
-                sources=["ruff"],
-            )
-        )
-
-    return findings
+    """Delegates to RuffScanner - Python quality/style. Kept as the one
+    per-language concession in the pruned toolset: zero-config, cheap,
+    and genuinely not redundant with Semgrep's pattern-based rules (see
+    SCOPE.md for why this is the only quality linter still in scope).
+    """
+    return _run_scanner_adapter(RuffScanner(), context, timeout_seconds)
 
 
-def run_pip_audit(
+def run_betterleaks(
     context: ChangeContext,
+    timeout_seconds: float = 60,
+    extra_config: dict | None = None,
 ) -> list[Finding]:
-    dependency_files = {
-        "pyproject.toml",
-        "requirements.txt",
-        "requirements-dev.txt",
-        "poetry.lock",
-        "uv.lock",
-        "Pipfile",
-        "Pipfile.lock",
-    }
+    """Delegates to BetterleaksScanner. Not called from
+    run_deterministic() below - §10.3 requires this to run
+    unconditionally, independent of the mode split and
+    `deterministic.enabled`; see orchestrator.py. `extra_config` should
+    be the `validation.deterministic` config dict, to pass through
+    `betterleaks_live_validation`.
+    """
+    return _run_scanner_adapter(BetterleaksScanner(), context, timeout_seconds, extra_config)
 
-    dependency_change = any(
-        Path(file).name in dependency_files
-        for file in context.files
-    )
 
-    if not dependency_change:
-        return []
+def run_semgrep(
+    context: ChangeContext,
+    timeout_seconds: float = 60,
+    extra_config: dict | None = None,
+) -> list[Finding]:
+    """Delegates to SemgrepScanner - the service's sole general-purpose,
+    multi-language SAST engine. Per SCOPE.md, this is deliberately the
+    only pattern-based security scanner in the bundle: Bandit, Bearer,
+    and CodeQL were cut because their coverage overlapped this tool's
+    rulesets without adding a capability worth a whole extra dependency.
+    Growth to a new language's security coverage should mean enabling
+    more of Semgrep's own rule registry, not adding another scanner.
+    """
+    return _run_scanner_adapter(SemgrepScanner(), context, timeout_seconds, extra_config)
 
-    result = _run(
-        [
-            "pip-audit",
-            "--format=json",
-            ".",
-        ]
-    )
 
-    if result.returncode not in (0, 1):
-        raise DeterministicAnalysisError(
-            "pip-audit failed: "
-            + (result.stderr.strip() or "no diagnostic output")
-        )
+def run_osv(
+    context: ChangeContext,
+    timeout_seconds: float = 60,
+) -> list[Finding]:
+    """Delegates to OSVScanner - the service's sole dependency-
+    vulnerability scanner. OSV.dev's database already aggregates PyPA's
+    advisory feed alongside every other ecosystem it covers, so this
+    alone also covers what a Python-only tool (pip-audit) would - see
+    SCOPE.md for why pip-audit was cut rather than kept in parallel.
+    """
+    return _run_scanner_adapter(OSVScanner(), context, timeout_seconds)
 
-    try:
-        raw = json.loads(result.stdout or "[]")
-    except json.JSONDecodeError as exc:
-        raise DeterministicAnalysisError(
-            "pip-audit returned malformed JSON"
-        ) from exc
 
-    findings: list[Finding] = []
+Runner = Callable[[ChangeContext, float, dict | None], list[Finding]]
 
-    for item in raw:
-        name = item.get("name", "unknown-package")
-        version = item.get("version", "unknown")
+# One uniform-signature entry per job `validation/graph.py`'s planner can
+# emit, keyed by ScannerJob.scanner (== Scanner.name for registry-backed
+# tools). Lambdas look up run_*() at call time, so patching them still works.
+DETERMINISTIC_RUNNERS: dict[str, Runner] = {
+    "betterleaks": lambda ctx, t, cfg: run_betterleaks(ctx, t, cfg),
+    "gitscribe-path-check": lambda ctx, _t, _cfg: _path_traversal_findings(ctx),
+    "ruff": lambda ctx, t, _cfg: run_ruff(ctx, timeout_seconds=t),
+    "semgrep": lambda ctx, t, cfg: run_semgrep(ctx, timeout_seconds=t, extra_config=cfg),
+    "osv-scanner": lambda ctx, t, _cfg: run_osv(ctx, timeout_seconds=t),
+}
 
-        for vuln in item.get("vulns", []):
-            vuln_id = vuln.get(
-                "id",
-                "unknown-vulnerability",
-            )
-
-            fixes = vuln.get("fix_versions") or []
-
-            if fixes:
-                remediation = (
-                    f"Upgrade {name} from {version} to a fixed "
-                    f"version: {', '.join(fixes)}"
-                )
-            else:
-                remediation = (
-                    f"Upgrade or replace {name} and verify the "
-                    "advisory remediation."
-                )
-
-            findings.append(
-                Finding(
-                    id=f"pip-audit:{name}:{vuln_id}",
-                    source="deterministic",
-                    category="dependency",
-                    rule_id=vuln_id,
-                    severity="high",
-                    confidence="high",
-                    message=(
-                        f"Known vulnerability {vuln_id} affects "
-                        f"{name} {version}."
-                    ),
-                    evidence=(
-                        f"pip-audit reported {vuln_id} for "
-                        f"{name} {version}."
-                    ),
-                    remediation=remediation,
-                    sources=["pip-audit"],
-                )
-            )
-
-    return findings
+# Everything except Betterleaks, which §10.3 requires to be planned
+# unconditionally, outside the mode split.
+BUNDLE: tuple[str, ...] = ("gitscribe-path-check", "ruff", "semgrep", "osv-scanner")
 
 
 def run_deterministic(
     context: ChangeContext,
+    timeout_seconds: float = 60,
+    extra_config: dict | None = None,
 ) -> list[Finding]:
+    """Sequential bundle run. The graph's `execute` node no longer calls
+    this (it runs each BUNDLE entry as its own bounded-concurrent job);
+    kept for direct/back-compat callers.
+    """
     findings: list[Finding] = []
 
-    findings.extend(_path_traversal_findings(context))
-    findings.extend(run_ruff(context))
-    findings.extend(run_pip_audit(context))
+    for name in BUNDLE:
+        findings.extend(DETERMINISTIC_RUNNERS[name](context, timeout_seconds, extra_config))
 
     return findings

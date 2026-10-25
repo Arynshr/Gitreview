@@ -47,7 +47,8 @@ def disposable_worktree(base_ref: str = "HEAD", cleanup: bool = True):
         logger.debug("removing disposable worktree at %s", tmp_dir)
         result = subprocess.run(
             ["git", "worktree", "remove", "--force", str(tmp_dir)],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if result.returncode != 0:
             # Best-effort fallback: worktree metadata removal failed, but
@@ -70,7 +71,9 @@ def attempt_merge(worktree_path: Path, branch: str) -> list[str]:
     logger.info("attempting merge of %r into worktree %s", branch, worktree_path)
     result = subprocess.run(
         ["git", "merge", "--no-commit", "--no-ff", branch],
-        capture_output=True, text=True, cwd=worktree_path,
+        capture_output=True,
+        text=True,
+        cwd=worktree_path,
     )
     if result.returncode == 0:
         logger.info("merge of %r is clean, no conflicts", branch)

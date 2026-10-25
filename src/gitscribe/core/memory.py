@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS prs (
 );
 """
 
+
 def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, coltype: str) -> None:
     """Idempotent ALTER TABLE for a single column.
 

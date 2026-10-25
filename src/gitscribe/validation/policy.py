@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from gitscribe.core.analysis.diff_symbols import changed_lines_by_file
 from gitscribe.validation.models import Finding
-
 
 _SEVERITY_RANK = {
     "info": 0,
@@ -11,17 +11,86 @@ _SEVERITY_RANK = {
     "critical": 4,
 }
 
+_SECRET_CATEGORY_KEYWORDS = (
+    "secret",
+    "credential",
+    "password",
+    "apikey",
+    "api key",
+    "api_key",
+    "private key",
+    "access key",
+    "token",
+)
 
-def evaluate(
+
+def _looks_like_secret(category: str) -> bool:
+    """block_secrets matches on Finding.category, which is free text (both
+    ruff's fixed categories and the AI reviewer's model-chosen ones) - not
+    a closed enum. A single keyword ("secret") is trivially missed by a
+    finding categorized e.g. "credential exposure" or "hardcoded api key".
+    This is still a substring match on free text, so it's not airtight,
+    but it closes the specific gap of a differently-worded secret category
+    silently bypassing the hard block.
+    """
+    lowered = category.lower()
+    return any(keyword in lowered for keyword in _SECRET_CATEGORY_KEYWORDS)
+
+
+def _changed_lines(diff: str) -> dict[str, set[int]]:
+    """
+    Map each touched file to the set of line numbers actually added by
+    the diff (new-file line numbers).
+
+    Per validation_layer.md §9.6, this no longer parses diff hunks
+    itself - that duplicated
+    `core.analysis.diff_symbols.changed_lines_by_file()`, the app's one
+    canonical diff-line parser (§3.2). This is now a thin container-type
+    adapter (list -> set) over it. `_is_new()` below still relies on
+    "file absent from this dict" meaning "don't filter" (fail toward
+    blocking on a parsing gap, not silently passing) -
+    `changed_lines_by_file()` preserves that contract, including for
+    pure renames and deletions.
+    """
+    return {file: set(lines) for file, lines in changed_lines_by_file(diff).items()}
+
+
+def _is_new(
+    finding: Finding,
+    changed: dict[str, set[int]],
+) -> bool:
+    if not finding.file or not finding.line:
+        # Findings with no attributable line (e.g. dependency
+        # vulnerabilities from pip-audit) describe the current state of
+        # the change as a whole and are always in scope.
+        return True
+
+    lines = changed.get(finding.file)
+
+    if lines is None:
+        # File not found in the diff we parsed (e.g. parsing gap) -
+        # fail toward treating it as new/in-scope rather than
+        # silently exempting it from the gate.
+        return True
+
+    return finding.line in lines
+
+
+def decide(
     findings: list[Finding],
     cfg: dict,
     errors: bool = False,
-) -> bool:
+    diff: str = "",
+) -> tuple[bool, str]:
+    """
+    Returns (ok, reason): ok is True when the change may pass; reason says
+    which rule failed the gate (empty when it passes).
+    """
     if errors and cfg.get(
         "fail_closed",
         True,
     ):
-        return False
+        return False, "scanner error with fail_closed enabled"
 
     fail_on = set(
         cfg.get(
@@ -37,24 +106,57 @@ def evaluate(
         )
     )
 
+    new_only = bool(
+        cfg.get(
+            "block_new_vulnerabilities",
+            True,
+        )
+    )
+
+    changed = _changed_lines(diff) if new_only else {}
+
     for finding in findings:
-        if (
-            block_secrets
-            and "secret"
-            in finding.category.lower()
-        ):
-            return False
+        if block_secrets and _looks_like_secret(finding.category):
+            return False, f"secret-like finding ({finding.category})"
 
         if finding.severity not in fail_on:
             continue
 
+        if new_only and not _is_new(finding, changed):
+            # Real, but pre-existing in this file and outside the lines
+            # this change touched - don't fail the gate on it.
+            continue
+
         if finding.source == "deterministic":
-            return True
+            return False, f"{finding.severity} finding from {finding.rule_id}"
 
-        if finding.confidence == "high":
-            return True
+        # AI-sourced finding. Per the advisory/gate rule (an ambiguous or
+        # low-confidence signal makes the gate default to the conservative
+        # path, never to "proceed") a *critical* severity finding blocks
+        # regardless of the model's own self-reported confidence. Without
+        # this, a model that hedges toward "low" confidence - whether by
+        # genuine uncertainty or because the diff content nudged it to -
+        # can make a real critical finding invisible to the gate entirely.
+        if finding.severity == "critical":
+            return False, "critical AI finding"
 
-    return False
+        if finding.confidence in ("high", "medium"):
+            return False, f"{finding.severity} AI finding ({finding.confidence} confidence)"
+
+        # confidence == "low" at a fail_on severity below critical:
+        # surfaced in the report, but treated as advisory-only for the
+        # gate itself.
+
+    return True, ""
+
+
+def evaluate(
+    findings: list[Finding],
+    cfg: dict,
+    errors: bool = False,
+    diff: str = "",
+) -> bool:
+    return decide(findings, cfg, errors=errors, diff=diff)[0]
 
 
 def sort_findings(

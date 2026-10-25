@@ -1,5 +1,4 @@
-"""Regression test for the pre-push hook recursion bug.
-"""
+"""Regression test for the pre-push hook recursion bug."""
 
 import ast
 from pathlib import Path

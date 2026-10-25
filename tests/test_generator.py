@@ -6,16 +6,22 @@ from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from gitscribe.core.generator import generator_node
 from gitscribe.core.state import GitScribeState
 
-FAKE_PR_JSON = json.dumps({
-    "title": "Add user auth",
-    "summary": "Adds login/logout endpoints.",
-    "changes": "- Added auth.py\n- Updated schema",
-    "testing": "Unit tests for login flow",
-    "impact": "Low risk, additive only",
-})
+FAKE_PR_JSON = json.dumps(
+    {
+        "title": "Add user auth",
+        "summary": "Adds login/logout endpoints.",
+        "changes": "- Added auth.py\n- Updated schema",
+        "testing": "Unit tests for login flow",
+        "impact": "Low risk, additive only",
+    }
+)
 
 CFG = {
-    "llm": {"model": "llama-3.3-70b-versatile", "fallback_model": "llama-3.1-8b-instant", "temperature": 0.2},
+    "llm": {
+        "model": "llama-3.3-70b-versatile",
+        "fallback_model": "llama-3.1-8b-instant",
+        "temperature": 0.2,
+    },
 }
 
 STATE = GitScribeState(
@@ -51,13 +57,15 @@ def test_style_instruction_reaches_prompt_text():
     """Verify each style preset actually changes prompt content, not just accepted and ignored."""
     from gitscribe.core.generator import GEN_PROMPT, STYLE_INSTRUCTIONS
 
-    prompt_value = GEN_PROMPT.invoke({
-        "style_instruction": STYLE_INSTRUCTIONS["concise"],
-        "change_summary": STATE.change_summary,
-        "commit_messages": STATE.commit_messages,
-        "past_prs": [],
-        "format_instructions": "",
-    })
+    prompt_value = GEN_PROMPT.invoke(
+        {
+            "style_instruction": STYLE_INSTRUCTIONS["concise"],
+            "change_summary": STATE.change_summary,
+            "commit_messages": STATE.commit_messages,
+            "past_prs": [],
+            "format_instructions": "",
+        }
+    )
     assert "terse" in prompt_value.to_string().lower()
 
 

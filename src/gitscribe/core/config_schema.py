@@ -48,6 +48,16 @@ class AgenticReviewConfig(BaseModel):
     enabled: bool = True
     max_context_tokens: int = Field(gt=0, default=6000)
     hops: int = Field(gt=0, default=2)
+    sandboxed_timeout_seconds: int | None = Field(
+        default=None,
+        gt=0,
+        description="Overrides validation.ai.timeout_seconds specifically "
+        "for `gitscribe review --sandboxed`. That path batches several "
+        "files into one local-model call and can legitimately take much "
+        "longer than a single-diff validation.ai review, so reusing the "
+        "same budget for both is wrong. See "
+        "core/analysis/rag.py:_sandboxed_ai_config.",
+    )
     min_blast_radius_for_review: int | None = Field(
         default=None,
         description="Optional secondary gate: also escalate a file to the "
@@ -92,6 +102,119 @@ class HooksConfig(BaseModel):
     commit_msg: CommitMsgHookConfig = CommitMsgHookConfig()
 
 
+# --- validation (`gitscribe verify`) schema ---------------------------------
+#
+# This is the single place that defines the shape, defaults, and
+# constraints of config.yaml's `validation:` block. Both
+# `validation.config.load_validation_config` (validation-only callers) and
+# `GitScribeConfig` as a whole (below) validate against these same models,
+# so there is exactly one schema to edit no matter which loader a given
+# command uses. `validation.mode` imports VALID_MODES/DEFAULT_MODE from
+# here rather than redefining them, for the same reason.
+Mode = Literal["static", "agentic", "both"]
+VALID_MODES: tuple[Mode, ...] = ("static", "agentic", "both")
+DEFAULT_MODE: Mode = "both"  # preserves pre-existing behavior when unspecified
+
+
+class FileRule(BaseModel):
+    path: str
+    mode: Mode
+
+
+class DeterministicValidationConfig(BaseModel):
+    enabled: bool = True
+    timeout_seconds: float = Field(
+        gt=0,
+        default=60,
+        description="Wall-clock limit per scanner subprocess (ruff, "
+        "pip-audit). Previously unbounded - a hung scanner could block "
+        "the push/merge indefinitely.",
+    )
+    max_workers: int = Field(
+        gt=0,
+        default=4,
+        description="Max scanner subprocesses run concurrently in the "
+        "validation graph's execute node.",
+    )
+    betterleaks_live_validation: bool = Field(
+        default=False,
+        description="Passes --validation to Betterleaks, which calls out "
+        "to each credential's own provider API (AWS, GitHub, etc.) to "
+        "confirm it's actually live. Off by default: real network egress "
+        "and third-party calls from what may be an unattended hook/CI "
+        "run, not something to enable silently.",
+    )
+    semgrep_config: str = Field(
+        default="p/default",
+        description="Semgrep --config value. 'p/default' (the default) pulls "
+        "rules from Semgrep's registry over the network on every run. Do not "
+        "use 'auto': it requires metrics, which this scanner turns off. Set a "
+        "local ruleset file/directory path for a fully offline setup.",
+    )
+
+
+class AIReviewValidationConfig(BaseModel):
+    enabled: bool = True
+    force: bool = Field(
+        default=False,
+        description="Always run the sandboxed AI review pass regardless of "
+        "'enabled' above. Equivalent to always passing `gitscribe verify "
+        "--force-agentic` - use this for a permanent/CI setting instead of "
+        "remembering the flag on every invocation. Independent of the "
+        "deterministic/static path's results either way: the two paths "
+        "always run on their own, one is never skipped because the other "
+        "already found something. Still requires --sandboxed (hooks "
+        "always pass it) to actually execute - this only overrides the "
+        "enabled gate, not the sandbox opt-in.",
+    )
+    provider: Literal["llamacpp"] = "llamacpp"
+    model: str = "qwen2.5-coder-3b-instruct-q4_k_m"
+    base_url: str = "http://127.0.0.1:8080"
+    api_key_env: str = "VALIDATION_API_KEY"
+    timeout_seconds: float = Field(
+        gt=0,
+        default=120,
+        description="Per-model-request timeout. Not the run's total budget - "
+        "see total_timeout_seconds/max_turns.",
+    )
+    max_context_tokens: int = Field(gt=0, default=6000)
+    max_output_tokens: int = Field(gt=0, default=1200)
+    max_file_chars: int = Field(gt=0, default=12000)
+    max_turns: int = Field(
+        gt=0,
+        default=6,
+        description="Max model requests for one review's tool-calling loop.",
+    )
+    total_timeout_seconds: float = Field(
+        gt=0,
+        default=300,
+        description="Aggregate wall-clock budget across every turn of one review.",
+    )
+
+
+class ValidationConfig(BaseModel):
+    enabled: bool = True
+    fail_closed: bool = True
+    fail_on: list[Literal["critical", "high", "medium", "low", "info"]] = Field(
+        default_factory=lambda: ["critical", "high"]
+    )
+    block_secrets: bool = True
+    block_new_vulnerabilities: bool = True
+    # Ordered path->mode assignments for batching/pre-defining review scope.
+    # First match wins; files matching nothing use DEFAULT_MODE ("both").
+    file_rules: list[FileRule] = Field(default_factory=list)
+    deterministic: DeterministicValidationConfig = DeterministicValidationConfig()
+    ai: AIReviewValidationConfig = AIReviewValidationConfig()
+    block_pr_generation: bool = Field(
+        default=False,
+        description="If True, a FAIL validation result (see "
+        "core/validation_bridge.py) routes PR generation to "
+        "template_fallback instead of calling the LLM. Off by default so "
+        "existing `generate`/`create-pr` behavior is unchanged unless "
+        "explicitly opted into.",
+    )
+
+
 class GitScribeConfig(BaseModel):
     llm: LLMConfig
     retrieval: RetrievalConfig = RetrievalConfig()
@@ -101,6 +224,7 @@ class GitScribeConfig(BaseModel):
     merge_preview: MergePreviewConfig = MergePreviewConfig()
     review: ReviewConfig = ReviewConfig()
     hooks: HooksConfig = HooksConfig()
+    validation: ValidationConfig = ValidationConfig()
     ignore_patterns: list[str] = Field(default_factory=list)
 
     def as_dict(self) -> dict:

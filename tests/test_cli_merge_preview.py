@@ -26,8 +26,10 @@ def test_merge_preview_reports_clean_merge(tmp_path, monkeypatch):
     monkeypatch.setenv("API_KEY", "fake-key")
 
     clean_report = MergePreviewReport(ours_branch="main", theirs_branch="feature/x", clean=True)
-    with patch("gitscribe.cli.current_branch", return_value="main"), \
-         patch("gitscribe.cli.run_merge_preview", return_value=clean_report):
+    with (
+        patch("gitscribe.cli.current_branch", return_value="main"),
+        patch("gitscribe.cli.run_merge_preview", return_value=clean_report),
+    ):
         result = runner.invoke(app, ["merge-preview", "feature/x"])
 
     assert result.exit_code == 0
@@ -40,14 +42,30 @@ def test_merge_preview_reports_conflicts_with_confidence(tmp_path, monkeypatch):
     monkeypatch.setenv("API_KEY", "fake-key")
 
     conflict_report = MergePreviewReport(
-        ours_branch="main", theirs_branch="feature/x", clean=False,
-        files=[FileReport(file="app.py", resolutions=[
-            HunkResolution(hunk_index=0, resolved_text="merged", rationale="safe combine", confidence="high"),
-            HunkResolution(hunk_index=1, resolved_text="", rationale="ambiguous", confidence="low"),
-        ])],
+        ours_branch="main",
+        theirs_branch="feature/x",
+        clean=False,
+        files=[
+            FileReport(
+                file="app.py",
+                resolutions=[
+                    HunkResolution(
+                        hunk_index=0,
+                        resolved_text="merged",
+                        rationale="safe combine",
+                        confidence="high",
+                    ),
+                    HunkResolution(
+                        hunk_index=1, resolved_text="", rationale="ambiguous", confidence="low"
+                    ),
+                ],
+            )
+        ],
     )
-    with patch("gitscribe.cli.current_branch", return_value="main"), \
-         patch("gitscribe.cli.run_merge_preview", return_value=conflict_report):
+    with (
+        patch("gitscribe.cli.current_branch", return_value="main"),
+        patch("gitscribe.cli.run_merge_preview", return_value=conflict_report),
+    ):
         result = runner.invoke(app, ["merge-preview", "feature/x"])
 
     assert result.exit_code == 0
@@ -62,8 +80,10 @@ def test_merge_preview_json_output_is_valid_json(tmp_path, monkeypatch):
     monkeypatch.setenv("API_KEY", "fake-key")
 
     report = MergePreviewReport(ours_branch="main", theirs_branch="feature/x", clean=True)
-    with patch("gitscribe.cli.current_branch", return_value="main"), \
-         patch("gitscribe.cli.run_merge_preview", return_value=report):
+    with (
+        patch("gitscribe.cli.current_branch", return_value="main"),
+        patch("gitscribe.cli.run_merge_preview", return_value=report),
+    ):
         result = runner.invoke(app, ["merge-preview", "feature/x", "--json"])
 
     assert result.exit_code == 0
@@ -77,8 +97,13 @@ def test_merge_preview_worktree_error_exits_nonzero(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("API_KEY", "fake-key")
 
-    with patch("gitscribe.cli.current_branch", return_value="main"), \
-         patch("gitscribe.cli.run_merge_preview", side_effect=WorktreeError("could not create preview worktree")):
+    with (
+        patch("gitscribe.cli.current_branch", return_value="main"),
+        patch(
+            "gitscribe.cli.run_merge_preview",
+            side_effect=WorktreeError("could not create preview worktree"),
+        ),
+    ):
         result = runner.invoke(app, ["merge-preview", "feature/x"])
 
     assert result.exit_code == 1
@@ -102,8 +127,10 @@ def test_merge_preview_passes_custom_base_ref_through(tmp_path, monkeypatch):
     monkeypatch.setenv("API_KEY", "fake-key")
 
     report = MergePreviewReport(ours_branch="main", theirs_branch="feature/x", clean=True)
-    with patch("gitscribe.cli.current_branch", return_value="main"), \
-         patch("gitscribe.cli.run_merge_preview", return_value=report) as mock_run:
+    with (
+        patch("gitscribe.cli.current_branch", return_value="main"),
+        patch("gitscribe.cli.run_merge_preview", return_value=report) as mock_run,
+    ):
         result = runner.invoke(app, ["merge-preview", "feature/x", "--base", "release/2.0"])
 
     assert result.exit_code == 0

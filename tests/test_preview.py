@@ -8,7 +8,11 @@ from gitscribe.core.merge_preview.models import BranchIntent, ConflictHunk, Hunk
 from gitscribe.core.merge_preview.resolver import resolve_file
 
 CFG = {
-    "llm": {"model": "openai/gpt-oss-20b", "fallback_model": "openai/gpt-oss-20b", "temperature": 0.2},
+    "llm": {
+        "model": "openai/gpt-oss-20b",
+        "fallback_model": "openai/gpt-oss-20b",
+        "temperature": 0.2,
+    },
     "merge_preview": {"escalate_below_confidence": "high"},
 }
 
@@ -46,10 +50,22 @@ def _single_json(**kwargs) -> str:
 
 def test_all_high_confidence_batch_needs_no_escalation():
     contexts = [_ctx(0), _ctx(1)]
-    batch_response = _batch_json([
-        {"hunk_index": 0, "resolved_text": "merged_0", "rationale": "trivial", "confidence": "high"},
-        {"hunk_index": 1, "resolved_text": "merged_1", "rationale": "trivial", "confidence": "high"},
-    ])
+    batch_response = _batch_json(
+        [
+            {
+                "hunk_index": 0,
+                "resolved_text": "merged_0",
+                "rationale": "trivial",
+                "confidence": "high",
+            },
+            {
+                "hunk_index": 1,
+                "resolved_text": "merged_1",
+                "rationale": "trivial",
+                "confidence": "high",
+            },
+        ]
+    )
     fake_llm = FakeListChatModel(responses=[batch_response])
 
     with patch("gitscribe.core.merge_preview.resolver.build_chat_model", return_value=fake_llm):
@@ -65,10 +81,22 @@ def test_all_high_confidence_batch_needs_no_escalation():
 
 def test_low_confidence_hunk_is_escalated_and_replaced():
     contexts = [_ctx(0), _ctx(1)]
-    batch_response = _batch_json([
-        {"hunk_index": 0, "resolved_text": "merged_0", "rationale": "trivial", "confidence": "high"},
-        {"hunk_index": 1, "resolved_text": "unsure_1", "rationale": "ambiguous", "confidence": "low"},
-    ])
+    batch_response = _batch_json(
+        [
+            {
+                "hunk_index": 0,
+                "resolved_text": "merged_0",
+                "rationale": "trivial",
+                "confidence": "high",
+            },
+            {
+                "hunk_index": 1,
+                "resolved_text": "unsure_1",
+                "rationale": "ambiguous",
+                "confidence": "low",
+            },
+        ]
+    )
     escalated_response = _single_json(
         resolved_text="better_merged_1", rationale="resolved after closer look", confidence="medium"
     )
@@ -94,9 +122,16 @@ def test_medium_confidence_threshold_accepts_medium_without_escalation():
     """
     cfg = {**CFG, "merge_preview": {"escalate_below_confidence": "medium"}}
     contexts = [_ctx(0)]
-    batch_response = _batch_json([
-        {"hunk_index": 0, "resolved_text": "merged_0", "rationale": "ok", "confidence": "medium"},
-    ])
+    batch_response = _batch_json(
+        [
+            {
+                "hunk_index": 0,
+                "resolved_text": "merged_0",
+                "rationale": "ok",
+                "confidence": "medium",
+            },
+        ]
+    )
     fake_llm = FakeListChatModel(responses=[batch_response])
 
     with patch("gitscribe.core.merge_preview.resolver.build_chat_model", return_value=fake_llm):
@@ -112,11 +147,15 @@ def test_hunk_missing_from_batch_response_is_escalated():
     still be escalated, not silently disappear from the report.
     """
     contexts = [_ctx(0), _ctx(1)]
-    batch_response = _batch_json([
-        {"hunk_index": 0, "resolved_text": "merged_0", "rationale": "ok", "confidence": "high"},
-        # hunk_index 1 omitted entirely
-    ])
-    escalated_response = _single_json(resolved_text="merged_1", rationale="isolated pass", confidence="high")
+    batch_response = _batch_json(
+        [
+            {"hunk_index": 0, "resolved_text": "merged_0", "rationale": "ok", "confidence": "high"},
+            # hunk_index 1 omitted entirely
+        ]
+    )
+    escalated_response = _single_json(
+        resolved_text="merged_1", rationale="isolated pass", confidence="high"
+    )
     fake_llm = FakeListChatModel(responses=[batch_response, escalated_response])
 
     with patch("gitscribe.core.merge_preview.resolver.build_chat_model", return_value=fake_llm):
@@ -134,11 +173,13 @@ def test_batch_call_failure_escalates_every_hunk():
     preview or silently reporting nothing.
     """
     contexts = [_ctx(0), _ctx(1)]
-    fake_llm = FakeListChatModel(responses=[
-        "not valid json at all",  # batch call fails to parse
-        _single_json(resolved_text="merged_0", rationale="ok", confidence="high"),
-        _single_json(resolved_text="merged_1", rationale="ok", confidence="high"),
-    ])
+    fake_llm = FakeListChatModel(
+        responses=[
+            "not valid json at all",  # batch call fails to parse
+            _single_json(resolved_text="merged_0", rationale="ok", confidence="high"),
+            _single_json(resolved_text="merged_1", rationale="ok", confidence="high"),
+        ]
+    )
 
     with patch("gitscribe.core.merge_preview.resolver.build_chat_model", return_value=fake_llm):
         report = resolve_file(contexts, CFG)
@@ -173,11 +214,13 @@ def test_resolve_file_empty_contexts_returns_empty_report():
 
 def test_file_report_helper_properties():
     contexts = [_ctx(0), _ctx(1), _ctx(2)]
-    batch_response = _batch_json([
-        {"hunk_index": 0, "resolved_text": "m0", "rationale": "ok", "confidence": "high"},
-        {"hunk_index": 1, "resolved_text": "m1", "rationale": "ok", "confidence": "medium"},
-        {"hunk_index": 2, "resolved_text": "m2", "rationale": "ok", "confidence": "low"},
-    ])
+    batch_response = _batch_json(
+        [
+            {"hunk_index": 0, "resolved_text": "m0", "rationale": "ok", "confidence": "high"},
+            {"hunk_index": 1, "resolved_text": "m1", "rationale": "ok", "confidence": "medium"},
+            {"hunk_index": 2, "resolved_text": "m2", "rationale": "ok", "confidence": "low"},
+        ]
+    )
     escalated_1 = _single_json(resolved_text="m1b", rationale="ok", confidence="medium")
     escalated_2 = _single_json(resolved_text="m2b", rationale="ok", confidence="high")
     fake_llm = FakeListChatModel(responses=[batch_response, escalated_1, escalated_2])
@@ -195,13 +238,20 @@ def test_uses_real_gather_context_end_to_end_smoke():
     through resolve_file() without shape mismatches.
     """
     hunk = _hunk(0)
-    with patch("gitscribe.core.merge_preview.context.index_store.symbol_at", return_value=None), \
-         patch("gitscribe.core.merge_preview.context.memory.fetch_prs_by_branch_prefix", return_value=[]):
+    with (
+        patch("gitscribe.core.merge_preview.context.index_store.symbol_at", return_value=None),
+        patch(
+            "gitscribe.core.merge_preview.context.memory.fetch_prs_by_branch_prefix",
+            return_value=[],
+        ),
+    ):
         ctx = gather_context(hunk, CFG, ours_branch="main", theirs_branch="feature/x")
 
-    batch_response = _batch_json([
-        {"hunk_index": 0, "resolved_text": "merged", "rationale": "ok", "confidence": "high"},
-    ])
+    batch_response = _batch_json(
+        [
+            {"hunk_index": 0, "resolved_text": "merged", "rationale": "ok", "confidence": "high"},
+        ]
+    )
     fake_llm = FakeListChatModel(responses=[batch_response])
 
     with patch("gitscribe.core.merge_preview.resolver.build_chat_model", return_value=fake_llm):

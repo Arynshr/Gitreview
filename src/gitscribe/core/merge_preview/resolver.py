@@ -24,8 +24,12 @@ _CONFIDENCE_ORDER: dict[Confidence, int] = {"low": 0, "medium": 1, "high": 2}
 
 class _SingleResolutionLLM(BaseModel):
     resolved_text: str = Field(description="Proposed merged content, no conflict markers")
-    rationale: str = Field(description="Why this preserves both branches' intent, or why it doesn't fully")
-    confidence: Confidence = Field(description="'high' only if you are confident this is correct and safe")
+    rationale: str = Field(
+        description="Why this preserves both branches' intent, or why it doesn't fully"
+    )
+    confidence: Confidence = Field(
+        description="'high' only if you are confident this is correct and safe"
+    )
 
 
 class _BatchResolutionLLM(_SingleResolutionLLM):
@@ -52,7 +56,8 @@ _SHARED_INSTRUCTIONS = (
 )
 
 _BATCH_PROMPT = ChatPromptTemplate.from_template(
-    _SHARED_INSTRUCTIONS + """
+    _SHARED_INSTRUCTIONS
+    + """
 
 File: {file}
 
@@ -65,7 +70,8 @@ no preamble, no markdown fence, starting with {{ and ending with }}."""
 )
 
 _SINGLE_PROMPT = ChatPromptTemplate.from_template(
-    _SHARED_INSTRUCTIONS + """
+    _SHARED_INSTRUCTIONS
+    + """
 
 This conflict was flagged as uncertain in an earlier pass — give it your full, \
 isolated attention.
@@ -108,15 +114,19 @@ def _fallback_resolution(hunk_index: int, error: Exception) -> HunkResolution:
 
 def _resolve_single(ctx: HunkContext, cfg: dict, model_name: str) -> HunkResolution:
     llm = build_chat_model(cfg, model_name, temperature=0.1)
-    prompt_value = _SINGLE_PROMPT.invoke({
-        "hunk_block": _hunk_block(ctx),
-        "format_instructions": _SINGLE_PARSER.get_format_instructions(),
-    })
+    prompt_value = _SINGLE_PROMPT.invoke(
+        {
+            "hunk_block": _hunk_block(ctx),
+            "format_instructions": _SINGLE_PARSER.get_format_instructions(),
+        }
+    )
     try:
         with timed_llm_call("merge_preview.hunk_resolve", model_name) as call_ctx:
             ai_msg = llm.invoke(prompt_value)
             call_ctx["usage"] = getattr(ai_msg, "usage_metadata", None)
-            parsed: _SingleResolutionLLM = _SINGLE_PARSER.invoke(_extract_json_block(ai_msg.content))
+            parsed: _SingleResolutionLLM = _SINGLE_PARSER.invoke(
+                _extract_json_block(ai_msg.content)
+            )
     except Exception as e:
         logger.warning("per-hunk resolution failed for hunk %d: %s", ctx.hunk.hunk_index, e)
         return _fallback_resolution(ctx.hunk.hunk_index, e)
@@ -130,7 +140,9 @@ def _resolve_single(ctx: HunkContext, cfg: dict, model_name: str) -> HunkResolut
     )
 
 
-def _batch_resolve(contexts: list[HunkContext], cfg: dict, model_name: str) -> dict[int, HunkResolution]:
+def _batch_resolve(
+    contexts: list[HunkContext], cfg: dict, model_name: str
+) -> dict[int, HunkResolution]:
     if not contexts:
         return {}
 
@@ -138,11 +150,13 @@ def _batch_resolve(contexts: list[HunkContext], cfg: dict, model_name: str) -> d
     hunks_block = "\n\n".join(_hunk_block(c) for c in contexts)
 
     llm = build_chat_model(cfg, model_name, temperature=0.1)
-    prompt_value = _BATCH_PROMPT.invoke({
-        "file": file,
-        "hunks_block": hunks_block,
-        "format_instructions": _BATCH_PARSER.get_format_instructions(),
-    })
+    prompt_value = _BATCH_PROMPT.invoke(
+        {
+            "file": file,
+            "hunks_block": hunks_block,
+            "format_instructions": _BATCH_PARSER.get_format_instructions(),
+        }
+    )
 
     try:
         with timed_llm_call("merge_preview.batch_resolve", model_name) as call_ctx:
@@ -150,7 +164,9 @@ def _batch_resolve(contexts: list[HunkContext], cfg: dict, model_name: str) -> d
             call_ctx["usage"] = getattr(ai_msg, "usage_metadata", None)
             parsed: _BatchResponse = _BATCH_PARSER.invoke(_extract_json_block(ai_msg.content))
     except Exception as e:
-        logger.warning("batch resolution failed for file %s: %s — every hunk will be escalated", file, e)
+        logger.warning(
+            "batch resolution failed for file %s: %s — every hunk will be escalated", file, e
+        )
         return {c.hunk.hunk_index: _fallback_resolution(c.hunk.hunk_index, e) for c in contexts}
 
     by_index = {
@@ -166,7 +182,9 @@ def _batch_resolve(contexts: list[HunkContext], cfg: dict, model_name: str) -> d
 
     for c in contexts:
         if c.hunk.hunk_index not in by_index:
-            logger.info("hunk %d missing from batch response for %s, will escalate", c.hunk.hunk_index, file)
+            logger.info(
+                "hunk %d missing from batch response for %s, will escalate", c.hunk.hunk_index, file
+            )
             by_index[c.hunk.hunk_index] = _fallback_resolution(
                 c.hunk.hunk_index, ValueError("hunk omitted from batch LLM response")
             )
@@ -183,7 +201,9 @@ def resolve_file(contexts: list[HunkContext], cfg: dict) -> FileReport:
 
     file = contexts[0].hunk.file
     model_name = cfg["llm"]["model"]
-    escalate_below: Confidence = cfg.get("merge_preview", {}).get("escalate_below_confidence", "high")
+    escalate_below: Confidence = cfg.get("merge_preview", {}).get(
+        "escalate_below_confidence", "high"
+    )
     threshold = _CONFIDENCE_ORDER[escalate_below]
 
     batch_results = _batch_resolve(contexts, cfg, model_name)
@@ -195,7 +215,10 @@ def resolve_file(contexts: list[HunkContext], cfg: dict) -> FileReport:
         if _CONFIDENCE_ORDER[result.confidence] < threshold:
             logger.info(
                 "hunk %d in %s below confidence floor (%s < %s), escalating",
-                hunk_index, file, result.confidence, escalate_below,
+                hunk_index,
+                file,
+                result.confidence,
+                escalate_below,
             )
             result = _resolve_single(contexts_by_index[hunk_index], cfg, model_name)
             escalation_calls += 1

@@ -64,8 +64,8 @@ def find_cycles(max_depth: int = 6) -> list[CycleFinding]:
     for row in rows:
         ids = [int(x) for x in row["trail"].split(",")]
         ids = ids[:-1]  # trail always loops back to the start node (trail[0] == trail[-1]);
-                        # drop the redundant closing entry so a 2-node cycle reads
-                        # ['a', 'b'] not ['a', 'b', 'a'], and a self-loop reads ['a'] not ['a', 'a']
+        # drop the redundant closing entry so a 2-node cycle reads
+        # ['a', 'b'] not ['a', 'b', 'a'], and a self-loop reads ['a'] not ['a', 'a']
         key = frozenset(ids)
         if key in seen_sets:
             continue
@@ -123,7 +123,13 @@ def fan_in_out(threshold: int = 10) -> list[FanFinding]:
     conn.close()
 
     return [
-        FanFinding(symbol_id=r["id"], name=r["name"], file=r["file"], fan_in=r["fan_in"], fan_out=r["fan_out"])
+        FanFinding(
+            symbol_id=r["id"],
+            name=r["name"],
+            file=r["file"],
+            fan_in=r["fan_in"],
+            fan_out=r["fan_out"],
+        )
         for r in rows
         if r["fan_in"] >= threshold or r["fan_out"] >= threshold
     ]
