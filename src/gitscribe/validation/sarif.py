@@ -79,7 +79,9 @@ def _result(finding: Finding) -> dict:
     }
 
 
-def to_sarif(result: ValidationResult, tool_name: str = "GitScribe", tool_version: str = "0.1") -> str:
+def to_sarif(
+    result: ValidationResult, tool_name: str = "GitScribe", tool_version: str = "0.1"
+) -> str:
     """Render a `ValidationResult` as a SARIF 2.1.0 log (one `run`, one
     synthetic `tool.driver` representing GitScribe's own aggregated
     output - not one SARIF run per underlying scanner, since aggregation/

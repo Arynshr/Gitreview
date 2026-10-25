@@ -78,9 +78,7 @@ def aggregate(findings: list[Finding]) -> list[Finding]:
                 f"rule {loser.rule_id}: {loser.message})"
             )
             if loser.remediation and loser.remediation != winner.remediation:
-                merged_remediation = (
-                    f"{winner.remediation} | {loser.source}: {loser.remediation}"
-                )
+                merged_remediation = f"{winner.remediation} | {loser.source}: {loser.remediation}"
 
         merged[key] = winner.model_copy(
             update={

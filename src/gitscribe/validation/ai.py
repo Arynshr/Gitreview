@@ -230,7 +230,9 @@ class AIFindingOut(BaseModel):
         return value
 
 
-def _to_finding(item: AIFindingOut, index: int, allowed_files: set[str], model_name: str) -> Finding:
+def _to_finding(
+    item: AIFindingOut, index: int, allowed_files: set[str], model_name: str
+) -> Finding:
     """allowed_files varies per run, so this check can't live on the
     Pydantic model itself.
     """
@@ -253,7 +255,9 @@ def _to_finding(item: AIFindingOut, index: int, allowed_files: set[str], model_n
     )
 
 
-def _build_agent(model_name: str, base_url: str, api_key: str | None, model_settings: ModelSettings) -> Agent:
+def _build_agent(
+    model_name: str, base_url: str, api_key: str | None, model_settings: ModelSettings
+) -> Agent:
     provider = OpenAIProvider(
         base_url=f"{base_url}/v1",
         # OpenAI client requires a non-empty key even if llama-server
@@ -316,10 +320,13 @@ async def review_locally_async(
 
     tools = ReadOnlyReviewTools(context=context, max_file_chars=max_file_chars)
 
-    deterministic = "\n".join(
-        f"- {finding.category}/{finding.rule_id} at {finding.file}:{finding.line}: {finding.message}"
-        for finding in deterministic_findings
-    ) or "(none)"
+    deterministic = (
+        "\n".join(
+            f"- {finding.category}/{finding.rule_id} at {finding.file}:{finding.line}: {finding.message}"
+            for finding in deterministic_findings
+        )
+        or "(none)"
+    )
 
     diff = _redact(context.diff[:max_context_chars])
 

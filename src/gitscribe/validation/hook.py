@@ -143,8 +143,7 @@ def _uninstall_hook(
     kept = [
         line
         for line in lines
-        if line.strip() != verify_call
-        and not line.strip().startswith("# gitscribe-hook-version:")
+        if line.strip() != verify_call and not line.strip().startswith("# gitscribe-hook-version:")
     ]
 
     if verify_call not in "\n".join(lines):
@@ -155,7 +154,8 @@ def _uninstall_hook(
         for line in kept
         if line.strip()
         and not line.strip().startswith("#!")
-        and line.strip() not in ("exit $?", "set -eu", "set -uo pipefail", "[ -f .git/MERGE_HEAD ] || exit 0")
+        and line.strip()
+        not in ("exit $?", "set -eu", "set -uo pipefail", "[ -f .git/MERGE_HEAD ] || exit 0")
         and not line.strip().startswith("command -v gitscribe")
     ]
 

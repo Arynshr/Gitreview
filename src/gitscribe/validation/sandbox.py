@@ -126,6 +126,7 @@ DEFAULT_MODEL = "qwen2.5-coder-3b-instruct-q4_k_m"
 
 # --- TOFU manifest -----------------------------------------------------------
 
+
 def _load_manifest() -> dict:
     if not MANIFEST_PATH.is_file():
         return {}
@@ -196,6 +197,7 @@ def _download(url: str, dest: Path, label: str) -> None:
 
 # --- llama.cpp detection (install is out of scope, see module docstring) ---
 
+
 def find_llama_server() -> Path | None:
     """PATH only: llama.cpp is expected to be installed by the user through
     one of its own maintained channels (Homebrew, distro package, official
@@ -228,6 +230,7 @@ def _llama_server_install_hint() -> str:
 
 
 # --- model install ------------------------------------------------------------
+
 
 def resolve_model_path(model_name: str) -> Path:
     return MODELS_DIR / f"{model_name}.gguf"
@@ -279,6 +282,7 @@ def _persist_model_choice(model_name: str) -> None:
 
 # --- process management (start/stop/status) ----------------------------------
 
+
 def _pid_alive() -> int | None:
     if not PID_FILE.is_file():
         return None
@@ -308,7 +312,9 @@ def _wait_healthy(port: int, timeout_s: int) -> bool:
     return False
 
 
-def start_server(model_name: str | None = None, port: int = 8080, ctx_size: int | None = None) -> None:
+def start_server(
+    model_name: str | None = None, port: int = 8080, ctx_size: int | None = None
+) -> None:
     if _pid_alive():
         typer.echo(f"already running (pid {_pid_alive()})")
         return
@@ -339,7 +345,9 @@ def start_server(model_name: str | None = None, port: int = 8080, ctx_size: int 
 
     model_path = resolve_model_path(model_name)
     if not model_path.is_file():
-        raise SandboxError(f"model not downloaded: {model_path}. Run `gitscribe sandbox init` first.")
+        raise SandboxError(
+            f"model not downloaded: {model_path}. Run `gitscribe sandbox init` first."
+        )
 
     RUN_DIR.mkdir(parents=True, exist_ok=True)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -347,12 +355,18 @@ def start_server(model_name: str | None = None, port: int = 8080, ctx_size: int 
 
     args = [
         str(binary),
-        "-m", str(model_path),
-        "-c", str(ctx_size),
-        "--threads", str(os.cpu_count() or 4),
-        "--n-gpu-layers", "0",
-        "--host", "127.0.0.1",  # loopback only, always — see validation/ai.py
-        "--port", str(port),
+        "-m",
+        str(model_path),
+        "-c",
+        str(ctx_size),
+        "--threads",
+        str(os.cpu_count() or 4),
+        "--n-gpu-layers",
+        "0",
+        "--host",
+        "127.0.0.1",  # loopback only, always — see validation/ai.py
+        "--port",
+        str(port),
     ]
 
     typer.echo(f"starting: {' '.join(args)}")
@@ -416,14 +430,25 @@ def status_server(port: int = 8080) -> bool:
 
 # --- CLI ----------------------------------------------------------------------
 
-sandbox_app = typer.Typer(help="Install and manage the local llama.cpp sandbox used by `gitscribe verify`.")
+sandbox_app = typer.Typer(
+    help="Install and manage the local llama.cpp sandbox used by `gitscribe verify`."
+)
 
 
 @sandbox_app.command("init")
 def sandbox_init(
-    model: str = typer.Option(None, "--model", help=f"Model to install. One of: {', '.join(sorted(MODEL_REGISTRY))}"),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the interactive prompt and config.yaml write confirmation (for CI)."),
-    force: bool = typer.Option(False, "--force", help="Re-download the model even if already present."),
+    model: str = typer.Option(
+        None, "--model", help=f"Model to install. One of: {', '.join(sorted(MODEL_REGISTRY))}"
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip the interactive prompt and config.yaml write confirmation (for CI).",
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Re-download the model even if already present."
+    ),
 ) -> None:
     """Check for llama-server (does not install it) and download the chosen model (if needed)."""
     try:
@@ -441,7 +466,9 @@ def sandbox_init(
                 )
 
         if model not in MODEL_REGISTRY:
-            typer.echo(f"unknown model {model!r}. Available: {', '.join(sorted(MODEL_REGISTRY))}", err=True)
+            typer.echo(
+                f"unknown model {model!r}. Available: {', '.join(sorted(MODEL_REGISTRY))}", err=True
+            )
             raise typer.Exit(1)
 
         download_model(model, force=force)

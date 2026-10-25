@@ -36,11 +36,7 @@ class RuffScanner(OptionalScannerHooks):
         return None if shutil.which("ruff") else "ruff not found on PATH"
 
     def build_command(self, scope: AnalysisScope, config: dict) -> ScannerCommand | None:
-        python_files = [
-            f
-            for f in scope.files
-            if f.lower().endswith(".py") and Path(f).is_file()
-        ]
+        python_files = [f for f in scope.files if f.lower().endswith(".py") and Path(f).is_file()]
 
         if not python_files:
             return None
@@ -92,13 +88,9 @@ class RuffScanner(OptionalScannerHooks):
                     file=item.get("filename"),
                     line=item.get("location", {}).get("row"),
                     message=item.get("message", "Ruff finding"),
-                    evidence=(
-                        f"Ruff rule {code} reported this location "
-                        "in the changed file."
-                    ),
+                    evidence=(f"Ruff rule {code} reported this location in the changed file."),
                     remediation=(
-                        "Review the reported rule and apply the "
-                        "recommended secure pattern."
+                        "Review the reported rule and apply the recommended secure pattern."
                     ),
                     sources=["ruff"],
                 )

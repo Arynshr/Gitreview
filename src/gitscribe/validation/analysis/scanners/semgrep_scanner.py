@@ -91,7 +91,9 @@ class SemgrepScanner(OptionalScannerHooks):
                     category="security",
                     rule_id=check_id,
                     severity=_SEMGREP_SEVERITY.get(extra.get("severity", "WARNING"), "medium"),
-                    confidence=_SEMGREP_CONFIDENCE.get(metadata.get("confidence", "MEDIUM"), "medium"),
+                    confidence=_SEMGREP_CONFIDENCE.get(
+                        metadata.get("confidence", "MEDIUM"), "medium"
+                    ),
                     file=item.get("path"),
                     line=item.get("start", {}).get("line"),
                     message=extra.get("message", check_id),

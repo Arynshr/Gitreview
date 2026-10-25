@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import time
@@ -7,6 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import typer
+from rich.console import Console
 
 from gitscribe.cli import app
 from gitscribe.config_locator import find_config_path
@@ -21,7 +23,10 @@ from gitscribe.config_locator import find_config_path
 # code is. `sandbox` previously wasn't reachable from any import path the
 # real CLI actually takes, which is why `gitscribe sandbox` didn't exist
 # despite validation/sandbox.py being correct in isolation.
-from gitscribe.validation import sandbox as _sandbox  # noqa: F401
+from gitscribe.validation import (
+    report,
+    sandbox as _sandbox,  # noqa: F401
+)
 from gitscribe.validation.analysis.registry import build_default_registry
 from gitscribe.validation.checkpoint import load_reusable, save_latest
 from gitscribe.validation.config import (
@@ -41,9 +46,6 @@ from gitscribe.validation.models import (
 from gitscribe.validation.orchestrator import (
     validate_change,
 )
-from gitscribe.validation.policy import (
-    sort_findings,
-)
 from gitscribe.validation.resolver import (
     resolve_change,
 )
@@ -62,10 +64,7 @@ def _default_new_branch_base() -> str:
         check=False,
     )
 
-    if (
-        result.returncode == 0
-        and result.stdout.strip()
-    ):
+    if result.returncode == 0 and result.stdout.strip():
         return result.stdout.strip().replace(
             "refs/remotes/",
             "",
@@ -126,92 +125,19 @@ def _report(
     result: ValidationResult,
     as_json: bool,
     debug: bool,
+    view: str = "summary",
+    diff: str = "",
 ) -> None:
     if as_json:
-        typer.echo(
-            result.model_dump_json(
-                indent=2
-            )
-        )
+        typer.echo(result.model_dump_json(indent=2))
         return
 
-    typer.echo(
-        "\nGitScribe Verification\n"
-    )
+    console = Console()
 
-    typer.echo(
-        f"Result: {result.status}"
-    )
+    if view == "diff" and diff:
+        report.render_diff(result, diff, console)
 
-    typer.echo(
-        f"Findings: {len(result.findings)}"
-    )
-
-    for finding in sort_findings(
-        result.findings
-    ):
-        if (
-            finding.file
-            and finding.line
-        ):
-            location = (
-                f"{finding.file}:"
-                f"{finding.line}"
-            )
-        else:
-            location = (
-                finding.file
-                or "(repository)"
-            )
-
-        source = "/".join(
-            finding.sources
-            or [finding.source]
-        )
-
-        typer.echo(
-            f"\n[{finding.severity.upper()}] "
-            f"{finding.category} "
-            f"({source})"
-        )
-
-        typer.echo(location)
-        typer.echo(finding.message)
-
-        typer.echo(
-            f"Remediation: "
-            f"{finding.remediation}"
-        )
-
-    if result.errors:
-        typer.echo(
-            "\nAnalysis errors:"
-        )
-
-        for error in result.errors:
-            typer.echo(
-                f"  [{error.source}] "
-                f"{error.message}"
-            )
-
-    if debug and result.diagnostics:
-        typer.echo(f"\nJobs: {', '.join(result.diagnostics.get('jobs', [])) or '(none)'}")
-
-        for name, problem in result.diagnostics.get("scanner_health", {}).items():
-            if problem:
-                typer.echo(f"  {name}: {problem}")
-
-    if debug and result.timings:
-        typer.echo("\nTimings:")
-
-        for (
-            name,
-            seconds,
-        ) in result.timings.items():
-            typer.echo(
-                f"  {name}: "
-                f"{seconds:.3f}s"
-            )
+    report.render_summary(result, console, debug)
 
 
 def _run_one(
@@ -222,6 +148,7 @@ def _run_one(
     paths: list[str] | None = None,
     force_mode: str | None = None,
     sandboxed: bool = False,
+    emitter=None,
 ) -> ValidationResult:
     # Caching only applies to whole-change reviews (no --path/--mode
     # narrowing): a partial ad-hoc review isn't something a hook would
@@ -253,6 +180,7 @@ def _run_one(
         force_ai=force_ai,
         force_mode=force_mode,
         sandboxed=sandboxed,
+        emitter=emitter,
     )
 
     # Persist only the latest run (overwrites one file). Reusability rules -
@@ -270,14 +198,9 @@ def register_verify_command(
     ]
     | None = None,
 ) -> None:
-    loader = (
-        config_loader
-        or load_validation_config
-    )
+    loader = config_loader or load_validation_config
 
-    @command_app.command(
-        name="verify"
-    )
+    @command_app.command(name="verify")
     def verify(
         base: str = typer.Option(
             "origin/main",
@@ -290,10 +213,7 @@ def register_verify_command(
         pre_push: bool = typer.Option(
             False,
             "--pre-push",
-            help=(
-                "Read Git pre-push "
-                "ref updates from stdin."
-            ),
+            help=("Read Git pre-push ref updates from stdin."),
         ),
         pre_merge: bool = typer.Option(
             False,
@@ -307,10 +227,7 @@ def register_verify_command(
         install_hook: bool = typer.Option(
             False,
             "--install-hook",
-            help=(
-                "Install or safely upgrade the GitScribe pre-push and "
-                "pre-merge-commit hooks."
-            ),
+            help=("Install or safely upgrade the GitScribe pre-push and pre-merge-commit hooks."),
         ),
         uninstall_hook: bool = typer.Option(
             False,
@@ -403,6 +320,19 @@ def register_verify_command(
             False,
             "--debug",
         ),
+        stream: str = typer.Option(
+            "auto",
+            "--stream",
+            help=(
+                "Progress output: auto (live view on a TTY, none when piped), "
+                "live, json (NDJSON events on stdout, no text report), off."
+            ),
+        ),
+        view: str = typer.Option(
+            "summary",
+            "--view",
+            help="summary (default) or diff (findings annotated inline on the changed hunks).",
+        ),
     ) -> None:
         if install_hook:
             try:
@@ -413,16 +343,10 @@ def register_verify_command(
                     str(exc),
                     err=True,
                 )
-                raise typer.Exit(
-                    1
-                ) from exc
+                raise typer.Exit(1) from exc
 
-            typer.echo(
-                f"pre-push hook: {push_message}"
-            )
-            typer.echo(
-                f"pre-merge-commit hook: {merge_message}"
-            )
+            typer.echo(f"pre-push hook: {push_message}")
+            typer.echo(f"pre-merge-commit hook: {merge_message}")
             return
 
         if uninstall_hook:
@@ -445,8 +369,7 @@ def register_verify_command(
 
         if agentic and not force_agentic:
             typer.echo(
-                "note: --agentic is deprecated, use --force-agentic instead "
-                "(same behavior).",
+                "note: --agentic is deprecated, use --force-agentic instead (same behavior).",
                 err=True,
             )
             force_agentic = True
@@ -513,15 +436,25 @@ def register_verify_command(
                 raise typer.Exit(1) from exc
 
             if not cfg.get("enabled", True):
-                typer.echo(
-                    "GitScribe validation is disabled by configuration."
-                )
+                typer.echo("GitScribe validation is disabled by configuration.")
                 return
 
+        if stream not in ("auto", "live", "json", "off") or view not in ("summary", "diff"):
+            typer.echo("--stream must be auto|live|json|off and --view summary|diff.", err=True)
+            raise typer.Exit(1)
+
+        console = Console()
+        live: report.LiveRenderer | None = None
+        emitter = None
+        if not hook_triggered and not as_json:
+            if stream == "json":
+                emitter = report.ndjson_emitter()
+            elif stream == "live" or (stream == "auto" and sys.stdout.isatty()):
+                live = report.LiveRenderer(console)
+                emitter = live
+
         started = time.perf_counter()
-        results: list[
-            ValidationResult
-        ] = []
+        results: list[ValidationResult] = []
 
         try:
             if pre_push:
@@ -534,9 +467,7 @@ def register_verify_command(
 
             if not ranges:
                 typer.echo(
-                    "no merge in progress"
-                    if pre_merge
-                    else "no push updates require validation"
+                    "no merge in progress" if pre_merge else "no push updates require validation"
                 )
                 return
 
@@ -556,8 +487,7 @@ def register_verify_command(
 
                     if not range_cfg.get("enabled", True):
                         typer.echo(
-                            f"GitScribe validation is disabled by "
-                            f"configuration at {range_base}."
+                            f"GitScribe validation is disabled by configuration at {range_base}."
                         )
                         continue
                 else:
@@ -572,10 +502,13 @@ def register_verify_command(
                         paths=path or None,
                         force_mode=mode,
                         sandboxed=sandboxed,
+                        emitter=emitter,
                     )
                 )
 
         except Exception as exc:
+            if live:
+                live.stop()
             result = ValidationResult(
                 status="FAIL",
                 errors=[
@@ -584,12 +517,7 @@ def register_verify_command(
                         message=str(exc),
                     )
                 ],
-                timings={
-                    "total_s": (
-                        time.perf_counter()
-                        - started
-                    )
-                },
+                timings={"total_s": (time.perf_counter() - started)},
             )
 
             _report(
@@ -598,18 +526,11 @@ def register_verify_command(
                 debug,
             )
 
-            raise typer.Exit(
-                1
-            ) from exc
+            raise typer.Exit(1) from exc
 
         merged_findings = []
         errors = []
-        timings = {
-            "total_s": (
-                time.perf_counter()
-                - started
-            )
-        }
+        timings = {"total_s": (time.perf_counter() - started)}
 
         health: dict[str, object] = {}
         jobs: list[str] = []
@@ -617,13 +538,9 @@ def register_verify_command(
         for result in results:
             health.update(result.diagnostics.get("scanner_health", {}))
             jobs.extend(j for j in result.diagnostics.get("jobs", []) if j not in jobs)
-            merged_findings.extend(
-                result.findings
-            )
+            merged_findings.extend(result.findings)
 
-            errors.extend(
-                result.errors
-            )
+            errors.extend(result.errors)
 
             for (
                 key,
@@ -638,26 +555,47 @@ def register_verify_command(
                 )
 
         final = ValidationResult(
-            status=(
-                "FAIL"
-                if any(
-                    result.status
-                    == "FAIL"
-                    for result in results
-                )
-                else "PASS"
-            ),
+            status=("FAIL" if any(result.status == "FAIL" for result in results) else "PASS"),
             findings=merged_findings,
             errors=errors,
             timings=timings,
-            diagnostics={"scanner_health": health, "jobs": jobs},
+            diagnostics={
+                "scanner_health": health,
+                "jobs": jobs,
+                "gate_reason": "; ".join(
+                    r.diagnostics["gate_reason"]
+                    for r in results
+                    if r.diagnostics.get("gate_reason")
+                ),
+            },
         )
 
-        _report(
-            final,
-            as_json,
-            debug,
-        )
+        if live:
+            live.stop()
+
+        diff_text = ""
+        if view == "diff" and not hook_triggered:
+            diff_text = resolve_change(
+                base=base,
+                head=head,
+                extra_ignore_patterns=(cfg or {}).get("ignore_patterns", []),
+                paths=path or None,
+            ).diff
+
+        if stream == "json" and not hook_triggered and not as_json:
+            typer.echo(
+                json.dumps(
+                    {
+                        "type": "result",
+                        "status": final.status,
+                        "findings": [f.model_dump() for f in final.findings],
+                        "errors": [e.model_dump() for e in final.errors],
+                        "gate_reason": final.diagnostics.get("gate_reason", ""),
+                    }
+                )
+            )
+        else:
+            _report(final, as_json, debug, view=view, diff=diff_text)
 
         if sarif:
             Path(sarif).write_text(to_sarif(final), encoding="utf-8")

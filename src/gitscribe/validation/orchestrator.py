@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 
+from gitscribe.validation.events import Emitter
 from gitscribe.validation.graph import run_validation_sync
 from gitscribe.validation.models import ChangeContext, ValidationRequest, ValidationResult
 
@@ -12,6 +13,7 @@ def validate_change(
     force_ai: bool = False,
     force_mode: str | None = None,
     sandboxed: bool = False,
+    emitter: Emitter | None = None,
 ) -> ValidationResult:
     """Thin, backward-compatible facade over `validation/graph.py`'s
     execution DAG - kept so existing callers (`validation/cli.py`,
@@ -35,7 +37,7 @@ def validate_change(
         force_ai=force_ai,
     )
 
-    state = run_validation_sync(request, cfg, change=context)
+    state = run_validation_sync(request, cfg, change=context, emitter=emitter)
 
     assert state.result is not None  # every graph path ends in policy or finalize_empty
     return state.result

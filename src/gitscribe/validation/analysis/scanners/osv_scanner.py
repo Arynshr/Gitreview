@@ -39,12 +39,14 @@ _SEVERITY_MAP: dict[str, Severity] = {
     "low": "low",
 }
 
+
 class OSVScanner(OptionalScannerHooks):
     """OSV-Scanner adapter - multi-ecosystem dependency vulnerability
     scanning (npm, Go, Rust, Ruby, etc.), the gap pip-audit's Python-only
     scope leaves - same relationship Betterleaks/Bandit have (one tool
     covers Python, this one covers everything else).
     """
+
     name = "osv-scanner"
     category = "dependency"
 
@@ -54,14 +56,14 @@ class OSVScanner(OptionalScannerHooks):
     def preflight(self) -> str | None:
         return None if shutil.which("osv-scanner") else "osv-scanner not found on PATH"
 
-    def build_command(self, scope: AnalysisScope, config:dict) -> ScannerCommand | None:
+    def build_command(self, scope: AnalysisScope, config: dict) -> ScannerCommand | None:
         if not self.supports(scope):
             return None
 
         return ScannerCommand(
-            args = ["osv-scanner", "scan", "source", "--format", "json", "."],
+            args=["osv-scanner", "scan", "source", "--format", "json", "."],
             timeout_seconds=config.get("timeout_seconds", 60),
-            network_required= True,
+            network_required=True,
         )
 
     def parse(self, result: ProcessResult, scope: AnalysisScope) -> list[Finding]:
@@ -124,6 +126,7 @@ class OSVScanner(OptionalScannerHooks):
                     )
 
         return findings
+
 
 def severity_of(vuln: dict) -> Severity:
     """Best-effort: prefers OSV's plain-word `database_specific.severity`

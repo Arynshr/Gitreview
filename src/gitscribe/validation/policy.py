@@ -76,21 +76,21 @@ def _is_new(
     return finding.line in lines
 
 
-def evaluate(
+def decide(
     findings: list[Finding],
     cfg: dict,
     errors: bool = False,
     diff: str = "",
-) -> bool:
+) -> tuple[bool, str]:
     """
-    Returns True when the change is OK to pass, False when it should
-    fail the gate.
+    Returns (ok, reason): ok is True when the change may pass; reason says
+    which rule failed the gate (empty when it passes).
     """
     if errors and cfg.get(
         "fail_closed",
         True,
     ):
-        return False
+        return False, "scanner error with fail_closed enabled"
 
     fail_on = set(
         cfg.get(
@@ -116,11 +116,8 @@ def evaluate(
     changed = _changed_lines(diff) if new_only else {}
 
     for finding in findings:
-        if (
-            block_secrets
-            and _looks_like_secret(finding.category)
-        ):
-            return False
+        if block_secrets and _looks_like_secret(finding.category):
+            return False, f"secret-like finding ({finding.category})"
 
         if finding.severity not in fail_on:
             continue
@@ -131,7 +128,7 @@ def evaluate(
             continue
 
         if finding.source == "deterministic":
-            return False
+            return False, f"{finding.severity} finding from {finding.rule_id}"
 
         # AI-sourced finding. Per the advisory/gate rule (an ambiguous or
         # low-confidence signal makes the gate default to the conservative
@@ -141,16 +138,25 @@ def evaluate(
         # genuine uncertainty or because the diff content nudged it to -
         # can make a real critical finding invisible to the gate entirely.
         if finding.severity == "critical":
-            return False
+            return False, "critical AI finding"
 
         if finding.confidence in ("high", "medium"):
-            return False
+            return False, f"{finding.severity} AI finding ({finding.confidence} confidence)"
 
         # confidence == "low" at a fail_on severity below critical:
         # surfaced in the report, but treated as advisory-only for the
         # gate itself.
 
-    return True
+    return True, ""
+
+
+def evaluate(
+    findings: list[Finding],
+    cfg: dict,
+    errors: bool = False,
+    diff: str = "",
+) -> bool:
+    return decide(findings, cfg, errors=errors, diff=diff)[0]
 
 
 def sort_findings(

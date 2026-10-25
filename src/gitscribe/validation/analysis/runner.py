@@ -49,9 +49,7 @@ def run_scanner_command(
             start_new_session=True,
         )
     except FileNotFoundError as exc:
-        raise ScannerExecutionError(
-            f"required scanner not found: {command.args[0]}"
-        ) from exc
+        raise ScannerExecutionError(f"required scanner not found: {command.args[0]}") from exc
 
     try:
         stdout, stderr = proc.communicate(timeout=command.timeout_seconds)
@@ -84,8 +82,7 @@ def run_scanner_command(
 
     if timed_out:
         raise ScannerExecutionError(
-            f"{command.args[0]} did not finish within "
-            f"{command.timeout_seconds}s"
+            f"{command.args[0]} did not finish within {command.timeout_seconds}s"
         )
 
     return ProcessResult(
