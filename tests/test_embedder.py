@@ -10,12 +10,19 @@ from gitscribe.core.indexer.parser import Symbol
 
 def make_symbol(name="foo", kind="function", parent=None, calls=None, bases=None):
     return Symbol(
-        name=name, kind=kind, file="a.py", lineno=1, end_lineno=1,
-        parent=parent, calls=calls or [], bases=bases or [],
+        name=name,
+        kind=kind,
+        file="a.py",
+        lineno=1,
+        end_lineno=1,
+        parent=parent,
+        calls=calls or [],
+        bases=bases or [],
     )
 
 
 # --- _symbol_to_text ---
+
 
 def test_symbol_to_text_includes_kind_and_name():
     text = embedder._symbol_to_text(make_symbol(name="helper", kind="function"))
@@ -49,6 +56,7 @@ def test_symbol_to_text_omits_empty_sections():
 
 # --- vector <-> blob round trip ---
 
+
 def test_vector_blob_round_trip():
     vec = np.array([0.1, 0.2, 0.3], dtype=np.float32)
     blob = embedder.vector_to_blob(vec)
@@ -64,6 +72,7 @@ def test_vector_to_blob_casts_to_float32():
 
 
 # --- cosine_similarity ---
+
 
 def test_cosine_similarity_identical_vectors():
     v = np.array([1.0, 2.0, 3.0])
@@ -92,6 +101,7 @@ def test_cosine_similarity_zero_vector_does_not_raise():
 
 # --- provider dispatch ---
 
+
 def test_embed_symbols_hosted_raises_not_implemented():
     with pytest.raises(NotImplementedError):
         embedder.embed_symbols_hosted([make_symbol()], cfg={})
@@ -111,7 +121,9 @@ def test_embed_symbols_routes_to_local(monkeypatch):
         return [np.zeros(3)]
 
     monkeypatch.setattr(embedder, "embed_symbols_local", fake_local)
-    result = embedder.embed_symbols([make_symbol()], cfg={"embedding": {"provider": "local", "model": "test-model"}})
+    result = embedder.embed_symbols(
+        [make_symbol()], cfg={"embedding": {"provider": "local", "model": "test-model"}}
+    )
     assert called["model_name"] == "test-model"
     assert len(result) == 1
 
@@ -130,6 +142,7 @@ def test_embed_symbols_defaults_to_local_when_no_config():
 
 
 # --- _get_local_model caching, with sentence_transformers mocked out ---
+
 
 def test_get_local_model_caches_instance(monkeypatch):
     fake_st_module = MagicMock()

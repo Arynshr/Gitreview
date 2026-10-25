@@ -19,7 +19,9 @@ STATE = GitScribeState(
 
 
 def test_risk_classifier_high_risk_does_not_skip():
-    fake = FakeListChatModel(responses=[json.dumps({"risk_score": 0.9, "reasoning": "touches auth"})])
+    fake = FakeListChatModel(
+        responses=[json.dumps({"risk_score": 0.9, "reasoning": "touches auth"})]
+    )
     with patch("gitscribe.core.risk_classifier.build_chat_model", return_value=fake):
         result = risk_classifier_node(STATE, CFG)
 
@@ -28,7 +30,9 @@ def test_risk_classifier_high_risk_does_not_skip():
 
 
 def test_risk_classifier_trivial_diff_skips():
-    fake = FakeListChatModel(responses=[json.dumps({"risk_score": 0.05, "reasoning": "formatting only"})])
+    fake = FakeListChatModel(
+        responses=[json.dumps({"risk_score": 0.05, "reasoning": "formatting only"})]
+    )
     with patch("gitscribe.core.risk_classifier.build_chat_model", return_value=fake):
         result = risk_classifier_node(STATE, CFG)
 

@@ -66,6 +66,7 @@ def test_as_dict_matches_node_access_pattern():
     assert d["llm"]["model"] == "llama-3.3-70b-versatile"
     assert d["retrieval"]["max_prs"] == 10
 
+
 def test_sandboxed_timeout_seconds_must_be_positive():
     with pytest.raises(ValidationError):
         from gitscribe.core.config_schema import AgenticReviewConfig
@@ -77,6 +78,7 @@ def test_sandboxed_timeout_seconds_must_be_positive():
 
     cfg = AgenticReviewConfig(sandboxed_timeout_seconds=300)
     assert cfg.sandboxed_timeout_seconds == 300
+
 
 def test_deterministic_max_workers_defaults_to_four():
     assert DeterministicValidationConfig().max_workers == 4

@@ -16,7 +16,9 @@ CFG = {
 
 def test_template_fallback_status_is_skipped_for_trivial_diff():
     """Risk-classifier skip path is not a failure - status must say so."""
-    state = GitScribeState(skip_generation=True, files_changed=["a.py"], change_summary=["tiny tweak"])
+    state = GitScribeState(
+        skip_generation=True, files_changed=["a.py"], change_summary=["tiny tweak"]
+    )
     result = template_fallback_node(state)
     assert result["status"] == "skipped"
 
@@ -47,15 +49,21 @@ def test_full_graph_reaches_failed_status_when_llm_always_fails():
     populated, after failure_handling.max_retries is exhausted."""
     always_bad = FakeListChatModel(responses=["not json at all"] * 5)
 
-    with patch("gitscribe.core.risk_classifier.build_chat_model", return_value=always_bad), \
-         patch("gitscribe.core.retriever.build_chat_model", return_value=always_bad), \
-         patch("gitscribe.core.generator.build_chat_model", return_value=always_bad), \
-         patch("gitscribe.core.diff_parser.get_raw_diff", return_value="diff --git a/x.py b/x.py\n+1"), \
-         patch("gitscribe.core.diff_parser.get_commit_messages", return_value=["feat: x"]), \
-         patch("gitscribe.core.diff_parser.extract_files_changed", return_value=["x.py"]), \
-         patch("gitscribe.core.memory.fetch_prs_by_branch_prefix", return_value=[]):
+    with (
+        patch("gitscribe.core.risk_classifier.build_chat_model", return_value=always_bad),
+        patch("gitscribe.core.retriever.build_chat_model", return_value=always_bad),
+        patch("gitscribe.core.generator.build_chat_model", return_value=always_bad),
+        patch(
+            "gitscribe.core.diff_parser.get_raw_diff", return_value="diff --git a/x.py b/x.py\n+1"
+        ),
+        patch("gitscribe.core.diff_parser.get_commit_messages", return_value=["feat: x"]),
+        patch("gitscribe.core.diff_parser.extract_files_changed", return_value=["x.py"]),
+        patch("gitscribe.core.memory.fetch_prs_by_branch_prefix", return_value=[]),
+    ):
         graph = build_graph(CFG)
-        result = graph.invoke(GitScribeState(branch_name="feature/x", attempt_count=0, status="pending"))
+        result = graph.invoke(
+            GitScribeState(branch_name="feature/x", attempt_count=0, status="pending")
+        )
 
     assert result["status"] == "failed"
     assert result["last_error"]

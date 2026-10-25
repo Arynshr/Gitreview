@@ -40,6 +40,7 @@ def test_init_fails_outside_git_repo(tmp_path, monkeypatch):
 
 def test_init_configures_merge_preview_git_alias(tmp_path, monkeypatch):
     import subprocess
+
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     monkeypatch.chdir(tmp_path)
 
@@ -55,9 +56,12 @@ def test_init_configures_merge_preview_git_alias(tmp_path, monkeypatch):
 
 def test_init_does_not_overwrite_a_preexisting_different_merge_preview_alias(tmp_path, monkeypatch):
     import subprocess
+
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     monkeypatch.chdir(tmp_path)
-    subprocess.run(["git", "config", "alias.merge-preview", "!echo custom"], check=True, cwd=tmp_path)
+    subprocess.run(
+        ["git", "config", "alias.merge-preview", "!echo custom"], check=True, cwd=tmp_path
+    )
 
     result = runner.invoke(app, ["init"])
 

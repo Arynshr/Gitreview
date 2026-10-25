@@ -40,6 +40,7 @@ def insert_edge(conn, source_id, target_id, edge_type="calls", resolved=True):
 
 # --- find_cycles ---
 
+
 def test_find_cycles_detects_direct_cycle(temp_db):
     """A -> B -> A."""
     conn = sqlite3.connect(temp_db)
@@ -96,6 +97,7 @@ def test_find_cycles_self_loop(temp_db):
 
 
 # --- find_dead_code ---
+
 
 def test_find_dead_code_no_incoming_edges(temp_db):
     conn = sqlite3.connect(temp_db)
@@ -156,6 +158,7 @@ def test_find_dead_code_ignores_classes_and_imports(temp_db):
 
 
 # --- fan_in_out ---
+
 
 def test_fan_in_out_above_threshold(temp_db):
     conn = sqlite3.connect(temp_db)

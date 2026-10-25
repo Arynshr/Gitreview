@@ -16,7 +16,9 @@ def temp_repo_with_index(tmp_path, monkeypatch):
 
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "a.py").write_text("def helper():\n    return 1\n\n\ndef main():\n    return helper()\n")
+    (repo / "a.py").write_text(
+        "def helper():\n    return 1\n\n\ndef main():\n    return helper()\n"
+    )
     (repo / "b.py").write_text("from a import main\n\n\ndef run():\n    return main()\n")
     return repo
 
@@ -79,7 +81,9 @@ def test_stale_edge_survives_and_reresolves_on_target_file_change(temp_repo_with
              AND e.resolved = 1"""
     ).fetchone()
     conn.close()
-    assert before is not None, "expected a resolved cross-file edge b.py -> main() before the change"
+    assert before is not None, (
+        "expected a resolved cross-file edge b.py -> main() before the change"
+    )
 
     # touch a.py (the edge's target file) without touching b.py at all
     (temp_repo_with_index / "a.py").write_text(
@@ -93,9 +97,13 @@ def test_stale_edge_survives_and_reresolves_on_target_file_change(temp_repo_with
     ).fetchone()
     conn.close()
 
-    assert after is not None, "edge should not be deleted by cascade when only the target file changes"
+    assert after is not None, (
+        "edge should not be deleted by cascade when only the target file changes"
+    )
     assert after["resolved"] == 1
-    assert after["target_id"] != before["target_id"], "should point at main()'s NEW symbol id, not the old one"
+    assert after["target_id"] != before["target_id"], (
+        "should point at main()'s NEW symbol id, not the old one"
+    )
 
 
 def test_force_reindex_survives_existing_review_findings(temp_repo_with_index):

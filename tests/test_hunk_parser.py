@@ -138,11 +138,14 @@ def test_empty_ours_or_theirs_side_is_valid():
 
 # --- hunks_for_file: the disk/git-touching wrapper around parse_conflicts ---
 
+
 def test_hunks_for_file_reads_and_parses_working_tree_file(tmp_path):
     (tmp_path / "greet.py").write_text(SIMPLE_CONFLICT)
 
     with patch("gitscribe.core.merge_preview.hunk_parser.merge_base", return_value=None):
-        hunks = hunks_for_file(tmp_path, "greet.py", base_ref="HEAD", theirs_branch="feature/greeting")
+        hunks = hunks_for_file(
+            tmp_path, "greet.py", base_ref="HEAD", theirs_branch="feature/greeting"
+        )
 
     assert len(hunks) == 1
     assert hunks[0].ours_text == '    return "hello"'
@@ -151,9 +154,16 @@ def test_hunks_for_file_reads_and_parses_working_tree_file(tmp_path):
 def test_hunks_for_file_backfills_base_text_from_merge_base_when_no_diff3(tmp_path):
     (tmp_path / "greet.py").write_text(SIMPLE_CONFLICT)
 
-    with patch("gitscribe.core.merge_preview.hunk_parser.merge_base", return_value="abc123"), \
-         patch("gitscribe.core.merge_preview.hunk_parser.read_blob", return_value="def greet():\n    return None\n"):
-        hunks = hunks_for_file(tmp_path, "greet.py", base_ref="HEAD", theirs_branch="feature/greeting")
+    with (
+        patch("gitscribe.core.merge_preview.hunk_parser.merge_base", return_value="abc123"),
+        patch(
+            "gitscribe.core.merge_preview.hunk_parser.read_blob",
+            return_value="def greet():\n    return None\n",
+        ),
+    ):
+        hunks = hunks_for_file(
+            tmp_path, "greet.py", base_ref="HEAD", theirs_branch="feature/greeting"
+        )
 
     assert hunks[0].base_text == "def greet():\n    return None\n"
 
@@ -162,7 +172,9 @@ def test_hunks_for_file_leaves_base_text_none_when_merge_base_unavailable(tmp_pa
     (tmp_path / "greet.py").write_text(SIMPLE_CONFLICT)
 
     with patch("gitscribe.core.merge_preview.hunk_parser.merge_base", return_value=None):
-        hunks = hunks_for_file(tmp_path, "greet.py", base_ref="HEAD", theirs_branch="feature/greeting")
+        hunks = hunks_for_file(
+            tmp_path, "greet.py", base_ref="HEAD", theirs_branch="feature/greeting"
+        )
 
     assert hunks[0].base_text is None
 
@@ -171,7 +183,9 @@ def test_hunks_for_file_missing_file_returns_empty_list(tmp_path):
     """Simulates a binary conflict or a file the merge deleted entirely on
     one side — should degrade gracefully, not raise.
     """
-    hunks = hunks_for_file(tmp_path, "does_not_exist.py", base_ref="HEAD", theirs_branch="feature/x")
+    hunks = hunks_for_file(
+        tmp_path, "does_not_exist.py", base_ref="HEAD", theirs_branch="feature/x"
+    )
     assert hunks == []
 
 
