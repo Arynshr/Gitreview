@@ -41,11 +41,6 @@ ignore_patterns:
 - '*.lock'
 - poetry.lock
 validation:
-  file_rules:
-  - path: src/gitscribe/validation/**
-    mode: agentic
-  - path: '**/*.sql'
-    mode: static
   enabled: true
   fail_closed: true
   fail_on:
@@ -56,7 +51,7 @@ validation:
   block_pr_generation: true
   deterministic:
     enabled: true
-    betterleaks_live_validation: True
+    betterleaks_live_validation: true
   ai:
     enabled: true
     provider: llamacpp

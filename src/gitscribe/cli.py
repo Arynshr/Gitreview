@@ -101,7 +101,8 @@ def default_branch() -> str | None:
     """
     result = subprocess.run(
         ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
         return None
@@ -111,7 +112,8 @@ def default_branch() -> str | None:
 def has_upstream_tracking_branch() -> bool:
     result = subprocess.run(
         ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     return result.returncode == 0
 
@@ -119,7 +121,8 @@ def has_upstream_tracking_branch() -> bool:
 def existing_pr_url(branch: str) -> str | None:
     result = subprocess.run(
         ["gh", "pr", "list", "--head", branch, "--state", "open", "--json", "url"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
         return None
@@ -136,6 +139,7 @@ def require_api_key() -> None:
     if not os.environ.get("API_KEY"):
         console.error("API_KEY not set. Run `gitscribe init` or `export API_KEY=<your-key>`.")
         raise typer.Exit(1)
+
 
 @app.command()
 def init():
@@ -154,7 +158,9 @@ def init():
     for hook_name in hook_names:
         dest = repo_hooks_dir / hook_name  # git requires the extensionless name here
         if dest.exists():
-            console.warn(f"{dest} already exists - not overwriting. Remove it first if you want to reinstall.")
+            console.warn(
+                f"{dest} already exists - not overwriting. Remove it first if you want to reinstall."
+            )
             continue
         src = Path(__file__).parent / "hooks" / f"{hook_name}.sh"
         if not src.exists():
@@ -185,7 +191,11 @@ def _ensure_merge_preview_alias() -> None:
     existing = subprocess.run(
         ["git", "config", "--get", "alias.merge-preview"], capture_output=True, text=True
     )
-    if existing.returncode == 0 and existing.stdout.strip() and "gitscribe merge-preview" not in existing.stdout:
+    if (
+        existing.returncode == 0
+        and existing.stdout.strip()
+        and "gitscribe merge-preview" not in existing.stdout
+    ):
         console.warn(
             f"git alias 'merge-preview' already set to '{existing.stdout.strip()}' - leaving it alone"
         )
@@ -193,12 +203,15 @@ def _ensure_merge_preview_alias() -> None:
 
     result = subprocess.run(
         ["git", "config", "alias.merge-preview", "!gitscribe merge-preview"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
         console.warn(f"could not configure `git merge-preview` alias: {result.stderr.strip()}")
         return
-    console.success("configured `git merge-preview <branch>` as a shortcut for `gitscribe merge-preview <branch>`")
+    console.success(
+        "configured `git merge-preview <branch>` as a shortcut for `gitscribe merge-preview <branch>`"
+    )
 
 
 def _ensure_api_key() -> None:
@@ -209,7 +222,9 @@ def _ensure_api_key() -> None:
         return
 
     try:
-        api_key = typer.prompt("Enter your LLM API key (provider is set in config.yaml)", hide_input=True)
+        api_key = typer.prompt(
+            "Enter your LLM API key (provider is set in config.yaml)", hide_input=True
+        )
     except (typer.Abort, click.exceptions.Abort):
         # Non-interactive context (CI, script, piped stdin) - the hook is
         # already installed at this point, so don't fail the whole command
@@ -230,6 +245,25 @@ def _ensure_api_key() -> None:
     console.success(f"wrote API_KEY to {ENV_PATH.resolve()}")
 
 
+def _show_validation(result: dict) -> None:
+    """Surface what validation found when it failed or errored - the graph
+    only carries a count/summary, so without this the user can't tell what
+    to fix."""
+    if result.get("validation_status") not in ("FAIL", "ERROR"):
+        return
+    console.warn(
+        f"validation {result['validation_status']}: {result.get('validation_summary', '')}"
+    )
+    colors = {"critical": "error", "high": "error", "error": "error", "medium": "warning"}
+    for severity, text in result.get("validation_findings", []):
+        console.line(f"  [{severity.upper()}] {text}", colors.get(severity, "info"))
+    shown = len(result.get("validation_findings", []))
+    total = result.get("validation_findings_count", 0)
+    if total > shown:
+        console.info(f"  ... {total - shown} more")
+    console.info("  full report: gitscribe verify    (skip for one run: --no-validate)")
+
+
 def _apply_validate_flag(config: dict, validate: bool | None) -> dict:
     """Per-run override of the validation stage inside generation.
     None = follow config.yaml; False = skip validation entirely (no scanners
@@ -242,10 +276,15 @@ def _apply_validate_flag(config: dict, validate: bool | None) -> dict:
 
 @app.command()
 def generate(
-    dry_run: bool = typer.Option(False, "--dry-run", help="Skip saving to memory; still calls the LLM"),
-    style: Style = typer.Option(Style.default, "--style", help="Style preset for the generated description"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Skip saving to memory; still calls the LLM"
+    ),
+    style: Style = typer.Option(
+        Style.default, "--style", help="Style preset for the generated description"
+    ),
     validate: bool | None = typer.Option(
-        None, "--validate/--no-validate",
+        None,
+        "--validate/--no-validate",
         help="Run or skip the validation stage for this run (default: follow config.yaml)",
     ),
 ):
@@ -269,6 +308,7 @@ def generate(
 
     console.info(f"\nTitle: {result.get('pr_title')}\n")
     console.info(result.get("pr_body", "(no body generated)"))
+    _show_validation(result)
 
     status = result.get("status")
 
@@ -306,9 +346,14 @@ def generate(
 @app.command(name="create-pr")
 def create_pr(
     style: Style = typer.Option(Style.default, "--style"),
-    push: bool = typer.Option(True, "--push/--no-push", help="Push the branch to origin first if it has no upstream tracking branch"),
+    push: bool = typer.Option(
+        True,
+        "--push/--no-push",
+        help="Push the branch to origin first if it has no upstream tracking branch",
+    ),
     validate: bool | None = typer.Option(
-        None, "--validate/--no-validate",
+        None,
+        "--validate/--no-validate",
         help="Run or skip the validation stage for this run (default: follow config.yaml)",
     ),
 ):
@@ -334,7 +379,9 @@ def create_pr(
         raise typer.Exit(1) from e
     base = default_branch()
     if base and branch == base:
-        console.error(f"you're on '{branch}', the repo's default branch — checkout a feature branch first.")
+        console.error(
+            f"you're on '{branch}', the repo's default branch — checkout a feature branch first."
+        )
         raise typer.Exit(1)
 
     existing_url = existing_pr_url(branch)
@@ -370,17 +417,20 @@ def create_pr(
     config = _apply_validate_flag(load_config(), validate)
     graph = build_graph(config)
     try:
-        result = graph.invoke(GitScribeState(
-            branch_name=branch,
-            style=style.value,
-            attempt_count=0,
-            fallback_used=False,
-            status="pending",
-        ))
+        result = graph.invoke(
+            GitScribeState(
+                branch_name=branch,
+                style=style.value,
+                attempt_count=0,
+                fallback_used=False,
+                status="pending",
+            )
+        )
     except GitCommandError as e:
         console.error(str(e))
         raise typer.Exit(1) from e
 
+    _show_validation(result)
     status = result.get("status")
     if status == "failed":
         reason = result.get("failure_type", "unknown")
@@ -392,14 +442,23 @@ def create_pr(
         )
         raise typer.Exit(1)
     if status == "skipped":
-        console.warn("diff below trivial threshold - opening PR with a generic template description")
+        console.warn(
+            "diff below trivial threshold - opening PR with a generic template description"
+        )
 
     try:
-        subprocess.run([
-            "gh", "pr", "create",
-            "--title", result["pr_title"],
-            "--body", result["pr_body"],
-        ], check=True)
+        subprocess.run(
+            [
+                "gh",
+                "pr",
+                "create",
+                "--title",
+                result["pr_title"],
+                "--body",
+                result["pr_body"],
+            ],
+            check=True,
+        )
     except subprocess.CalledProcessError as e:
         console.error(
             "`gh pr create` failed (see gh's output above for the reason). "
@@ -495,18 +554,25 @@ def review_cmd(
             except Exception as e:
                 console.warn(f"agentic review failed: {e}")
         else:
-            console.info("empty diff, skipping agentic review (index staleness is a separate condition)")
+            console.info(
+                "empty diff, skipping agentic review (index staleness is a separate condition)"
+            )
     if as_json:
         typer.echo(json.dumps({"lint_findings": lint_count, "agentic_findings": agentic_count}))
     else:
         console.success(f"review: {lint_count} lint finding(s), {agentic_count} agentic finding(s)")
 
+
 @app.command()
 def query(
     text: str = typer.Argument(..., help="Natural language query"),
     top_k: int = typer.Option(5, help="Number of matches"),
-    json_output: bool = typer.Option(False, "--json", help="Raw retrieval context as JSON, no LLM call"),
-    raw: bool = typer.Option(False, "--raw", help="Print raw retrieved context only, skip LLM synthesis"),
+    json_output: bool = typer.Option(
+        False, "--json", help="Raw retrieval context as JSON, no LLM call"
+    ),
+    raw: bool = typer.Option(
+        False, "--raw", help="Print raw retrieved context only, skip LLM synthesis"
+    ),
 ):
     """Ask a question about the indexed codebase.
 
@@ -570,9 +636,13 @@ def lint(
             console.success("no findings")
         for f in findings:
             location = f"{f.file}:{f.lineno}"
-            console.line(f"{f.severity:8} {location:50} {f.code:6} {f.message}", severity=f.severity)
+            console.line(
+                f"{f.severity:8} {location:50} {f.code:6} {f.message}", severity=f.severity
+            )
         if findings:
-            typer.echo(f"\n{len(findings)} findings, severity score {linter_mod.severity_score(findings):.2f}")
+            typer.echo(
+                f"\n{len(findings)} findings, severity score {linter_mod.severity_score(findings):.2f}"
+            )
 
     has_errors = any(f.severity == "error" for f in findings)
     if fails_on_error and has_errors:
@@ -629,7 +699,10 @@ def graph(
         return
 
     console.info(f"Blast radius for '{matched_name}' (depth {depth}):")
-    for direction, heading in (("caller", "Callers (who depends on it)"), ("callee", "Callees (what it depends on)")):
+    for direction, heading in (
+        ("caller", "Callers (who depends on it)"),
+        ("callee", "Callees (what it depends on)"),
+    ):
         group = [r for r in results if r.direction == direction]
         console.info(f"\n{heading}:")
         if not group:
@@ -638,6 +711,7 @@ def graph(
         for r in group:
             indent = "  " * r.depth
             console.info(f"{indent}└─ {r.name}  ({r.file}:{r.lineno})  [depth {r.depth}]")
+
 
 @app.command(name="pre-push")
 def pre_push_cmd():
@@ -652,9 +726,12 @@ def pre_push_cmd():
             print("blocked — override with: git push --no-verify")
             raise typer.Exit(code=1)
 
-    no_upstream = subprocess.run(
-        ["git", "rev-parse", "-q", "--verify", "@{u}"], capture_output=True
-    ).returncode != 0
+    no_upstream = (
+        subprocess.run(
+            ["git", "rev-parse", "-q", "--verify", "@{u}"], capture_output=True
+        ).returncode
+        != 0
+    )
     if no_upstream:
         subprocess.run(["gitscribe", "create-pr"])
 
@@ -692,7 +769,9 @@ def post_merge_cmd(ff: str = typer.Option("0")):
     memory.save_pr(branch, title=f"Merged: {branch}", body="\n".join(summary["change_summary"]))
 
     if cfg.get("hooks", {}).get("post_merge", {}).get("auto_tag", False):
-        bump = hook_utils.BUMP_FILE.read_text().strip() if hook_utils.BUMP_FILE.exists() else "patch"
+        bump = (
+            hook_utils.BUMP_FILE.read_text().strip() if hook_utils.BUMP_FILE.exists() else "patch"
+        )
         tag = hook_utils.next_tag(bump)
         subprocess.run(["git", "tag", tag])
         print(f"gitscribe: tagged {tag} ({bump})")
@@ -736,7 +815,9 @@ def merge_conflict_cmd():
 def merge_preview_cmd(
     branch: str = typer.Argument(..., help="Branch to speculatively merge"),
     base: str = typer.Option("HEAD", help="Ref to merge into (defaults to the current branch)"),
-    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON instead of formatted text"),
+    json_output: bool = typer.Option(
+        False, "--json", help="Emit machine-readable JSON instead of formatted text"
+    ),
 ):
     """Speculatively merge `branch` into `base` inside a disposable worktree
     and, if it conflicts, propose a resolution per hunk grounded in blast
@@ -776,7 +857,9 @@ def merge_preview_cmd(
         for res in file_report.resolutions:
             tag = "escalated" if res.escalated else "batch"
             severity = "info" if res.confidence == "high" else "warning"
-            console.line(f"  hunk {res.hunk_index} - confidence: {res.confidence} ({tag})", severity=severity)
+            console.line(
+                f"  hunk {res.hunk_index} - confidence: {res.confidence} ({tag})", severity=severity
+            )
             console.info(f"    {res.rationale}")
             if res.confidence == "high":
                 console.info("    proposed resolution:")
@@ -790,6 +873,7 @@ def merge_preview_cmd(
         "Nothing has been applied — this is a preview. Run the real merge "
         "yourself once you've reviewed it."
     )
+
 
 if __name__ == "__main__":
     app()
