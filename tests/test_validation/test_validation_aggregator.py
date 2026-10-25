@@ -19,7 +19,9 @@ def test_same_location_and_category_merge_case_insensitively(make_finding) -> No
 
 def test_deterministic_wins_and_ai_corroboration_is_preserved(make_finding) -> None:
     det = make_finding(source="deterministic", rule_id="S1", message="det msg", sources=["semgrep"])
-    ai = make_finding(source="ai", rule_id="AI-x", message="ai msg", sources=["model"], remediation="ai fix")
+    ai = make_finding(
+        source="ai", rule_id="AI-x", message="ai msg", sources=["model"], remediation="ai fix"
+    )
 
     (merged,) = aggregate([ai, det])  # order must not matter for who wins
 

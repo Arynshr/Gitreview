@@ -28,7 +28,9 @@ def store(monkeypatch, tmp_path):
     state = {"clean": True, "key": "k1"}
     monkeypatch.setattr(checkpoint, "CACHE_DIR", tmp_path / "cache")
     monkeypatch.setattr(checkpoint, "_clean_working_tree", lambda: state["clean"])
-    monkeypatch.setattr(checkpoint, "derive_thread_id", lambda cfg, base, head, *extra: state["key"])
+    monkeypatch.setattr(
+        checkpoint, "derive_thread_id", lambda cfg, base, head, *extra: state["key"]
+    )
     return SimpleNamespace(state=state, dir=tmp_path / "cache")
 
 
@@ -91,14 +93,22 @@ def test_only_the_latest_result_is_kept(store) -> None:
         store.state["key"] = f"k{i}"
         save_latest(_pass(timings={"n": float(i)}), CFG, "b", "h", cacheable=True)
 
-    assert [p.name for p in store.dir.iterdir()] == ["validation_latest.json"]  # bounded, no tmp residue
+    assert [p.name for p in store.dir.iterdir()] == [
+        "validation_latest.json"
+    ]  # bounded, no tmp residue
     assert _stored()["key"] == "k4"
     assert load_reusable(CFG, "b", "h").timings == {"n": 4.0}
 
 
 @pytest.mark.parametrize(
     "content",
-    ["", "{not json", "[]", '{"key": "k1", "reusable": true}', '{"key": "k1", "reusable": true, "result": {"status": "MAYBE"}}'],
+    [
+        "",
+        "{not json",
+        "[]",
+        '{"key": "k1", "reusable": true}',
+        '{"key": "k1", "reusable": true, "result": {"status": "MAYBE"}}',
+    ],
 )
 def test_corrupt_or_drifted_file_is_a_miss_not_an_error(store, content) -> None:
     store.dir.mkdir(parents=True)
@@ -135,7 +145,9 @@ def test_git_failure_while_writing_is_logged_and_isolated(store, monkeypatch, ca
     assert not latest_path().exists()
 
 
-def test_failed_atomic_replace_is_logged_and_leaves_no_temp_file(store, monkeypatch, caplog) -> None:
+def test_failed_atomic_replace_is_logged_and_leaves_no_temp_file(
+    store, monkeypatch, caplog
+) -> None:
     def boom(src, dst):
         raise OSError("disk full")
 

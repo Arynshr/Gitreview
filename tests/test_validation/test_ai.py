@@ -44,7 +44,12 @@ def _finding_out(**overrides) -> AIFindingOut:
 
 @pytest.mark.parametrize(
     "url",
-    ["http://example.com:11434", "https://127.0.0.1:8080", "http://10.0.0.5:8080", "ftp://localhost"],
+    [
+        "http://example.com:11434",
+        "https://127.0.0.1:8080",
+        "http://10.0.0.5:8080",
+        "ftp://localhost",
+    ],
 )
 def test_non_loopback_or_non_http_endpoint_is_rejected(url) -> None:
     with pytest.raises(AIReviewError):
@@ -137,7 +142,9 @@ def test_read_file_is_confined_to_changed_files(tools, tmp_path) -> None:
 
 
 def test_read_file_truncates_and_handles_binary(tools) -> None:
-    t, (text_path, bin_path) = tools({"a.py": "x" * 500, "b.bin": b"\xff\xfe\x00"}, max_file_chars=10)
+    t, (text_path, bin_path) = tools(
+        {"a.py": "x" * 500, "b.bin": b"\xff\xfe\x00"}, max_file_chars=10
+    )
 
     assert t.read_file(text_path) == "x" * 10
     assert "unavailable or binary" in t.read_file(bin_path)
@@ -183,7 +190,9 @@ def fake_agent(monkeypatch):
     built: list[int] = []
 
     def install(behavior):
-        monkeypatch.setattr(ai, "_build_agent", lambda *a, **k: (built.append(1), _FakeAgent(behavior))[1])
+        monkeypatch.setattr(
+            ai, "_build_agent", lambda *a, **k: (built.append(1), _FakeAgent(behavior))[1]
+        )
         monkeypatch.setattr(ai, "_register_tools", lambda agent: None)
         return built
 

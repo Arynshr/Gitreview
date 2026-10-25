@@ -36,7 +36,9 @@ def _planned(make_state, change, cfg, **request_overrides):
 # --- planner -----------------------------------------------------------------
 
 
-def test_plan_emits_one_job_per_applicable_scanner(all_tools_present, make_state, make_change, base_cfg) -> None:
+def test_plan_emits_one_job_per_applicable_scanner(
+    all_tools_present, make_state, make_change, base_cfg
+) -> None:
     change = make_change(files=("a.py", "requirements.txt"))
 
     out = plan_node(make_state(change, requested_mode="static"), base_cfg)
@@ -48,15 +50,27 @@ def test_plan_emits_one_job_per_applicable_scanner(all_tools_present, make_state
     assert out["scope"].secret_scan_scope == change.files
 
 
-def test_plan_skips_scanners_that_do_not_support_the_scope(all_tools_present, make_state, make_change, base_cfg) -> None:
-    out = plan_node(make_state(make_change(files=("README.md",)), requested_mode="static"), base_cfg)
+def test_plan_skips_scanners_that_do_not_support_the_scope(
+    all_tools_present, make_state, make_change, base_cfg
+) -> None:
+    out = plan_node(
+        make_state(make_change(files=("README.md",)), requested_mode="static"), base_cfg
+    )
 
-    assert _ids(out) == {"betterleaks", "gitscribe-path-check", "semgrep"}  # no ruff (.py), no osv (deps)
+    assert _ids(out) == {
+        "betterleaks",
+        "gitscribe-path-check",
+        "semgrep",
+    }  # no ruff (.py), no osv (deps)
     assert out["errors"] == []
 
 
-def test_missing_binary_is_a_logged_error_not_a_crash(monkeypatch, make_state, make_change, base_cfg, caplog) -> None:
-    monkeypatch.setattr("shutil.which", lambda name, *a, **k: None if name == "betterleaks" else f"/bin/{name}")
+def test_missing_binary_is_a_logged_error_not_a_crash(
+    monkeypatch, make_state, make_change, base_cfg, caplog
+) -> None:
+    monkeypatch.setattr(
+        "shutil.which", lambda name, *a, **k: None if name == "betterleaks" else f"/bin/{name}"
+    )
 
     with caplog.at_level(logging.WARNING, logger=GRAPH_LOGGER):
         out = plan_node(make_state(make_change(), requested_mode="static"), base_cfg)
@@ -69,7 +83,9 @@ def test_missing_binary_is_a_logged_error_not_a_crash(monkeypatch, make_state, m
     assert any("scanner unavailable" in r.getMessage() for r in caplog.records)
 
 
-def test_every_missing_tool_is_reported_and_path_check_still_runs(monkeypatch, make_state, make_change, base_cfg) -> None:
+def test_every_missing_tool_is_reported_and_path_check_still_runs(
+    monkeypatch, make_state, make_change, base_cfg
+) -> None:
     monkeypatch.setattr("shutil.which", lambda *a, **k: None)
 
     out = plan_node(make_state(make_change(), requested_mode="static"), base_cfg)
@@ -88,8 +104,12 @@ def test_required_secret_scan_is_never_dropped_by_supports(
     assert "betterleaks" in _ids(out)
 
 
-def test_disabling_deterministic_still_plans_secret_scan(all_tools_present, make_state, make_change) -> None:
-    out = plan_node(make_state(make_change(), requested_mode="static"), {"deterministic": {"enabled": False}})
+def test_disabling_deterministic_still_plans_secret_scan(
+    all_tools_present, make_state, make_change
+) -> None:
+    out = plan_node(
+        make_state(make_change(), requested_mode="static"), {"deterministic": {"enabled": False}}
+    )
 
     assert _ids(out) == {"betterleaks"}
 
@@ -104,7 +124,9 @@ def test_per_file_mode_no_longer_excludes_files_from_static_scanners(
     assert out["diagnostics"]["static_files"] == ["a.py"]
 
 
-def test_agentic_file_rules_are_ignored(all_tools_present, make_state, make_change, base_cfg) -> None:
+def test_agentic_file_rules_are_ignored(
+    all_tools_present, make_state, make_change, base_cfg
+) -> None:
     cfg = {**base_cfg, "file_rules": [{"path": "a.py", "mode": "agentic"}]}
 
     assert "ruff" in _ids(plan_node(make_state(make_change()), cfg))
@@ -147,7 +169,9 @@ def test_executor_is_concurrent_but_bounded(
     assert peak == 2
 
 
-def test_max_workers_one_serializes_jobs(all_tools_present, monkeypatch, make_state, make_change, base_cfg) -> None:
+def test_max_workers_one_serializes_jobs(
+    all_tools_present, monkeypatch, make_state, make_change, base_cfg
+) -> None:
     lock = threading.Lock()
     active = peak = 0
 
@@ -200,7 +224,9 @@ def test_one_failing_job_does_not_discard_the_others(
     assert sum("scanner job failed" in r.getMessage() for r in caplog.records) == 2
 
 
-def test_executor_records_per_scanner_timings(all_tools_present, stub_runners, make_state, make_change, base_cfg) -> None:
+def test_executor_records_per_scanner_timings(
+    all_tools_present, stub_runners, make_state, make_change, base_cfg
+) -> None:
     state = _planned(make_state, make_change(), base_cfg, requested_mode="static")
 
     out = asyncio.run(execute_node(state, base_cfg))
@@ -211,7 +237,12 @@ def test_executor_records_per_scanner_timings(all_tools_present, stub_runners, m
 def test_jobs_receive_their_planned_file_scope(
     all_tools_present, stub_runners, make_state, make_change, base_cfg
 ) -> None:
-    state = _planned(make_state, make_change(files=("a.py", "requirements.txt")), base_cfg, requested_mode="static")
+    state = _planned(
+        make_state,
+        make_change(files=("a.py", "requirements.txt")),
+        base_cfg,
+        requested_mode="static",
+    )
 
     asyncio.run(execute_node(state, base_cfg))
 
@@ -275,13 +306,17 @@ def test_scanner_failure_passes_when_fail_closed_is_disabled(
 
     monkeypatch.setitem(DETERMINISTIC_RUNNERS, "semgrep", boom)
 
-    result = _run(make_request, make_change(), {**base_cfg, "fail_closed": False}, requested_mode="static")
+    result = _run(
+        make_request, make_change(), {**base_cfg, "fail_closed": False}, requested_mode="static"
+    )
 
     assert result.status == "PASS"
     assert [e.source for e in result.errors] == ["semgrep"]  # still recorded
 
 
-def test_empty_diff_short_circuits(all_tools_present, stub_runners, make_request, make_change, base_cfg) -> None:
+def test_empty_diff_short_circuits(
+    all_tools_present, stub_runners, make_request, make_change, base_cfg
+) -> None:
     result = _run(make_request, make_change(diff="  \n"), base_cfg)
 
     assert result.status == "PASS"

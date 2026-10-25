@@ -11,7 +11,12 @@ from gitscribe.validation.analysis.scanners.ruff_scanner import RuffScanner
 def test_default_registry_has_the_closed_scanner_set() -> None:
     registry = build_default_registry()
 
-    assert {s.name for s in registry.implemented()} == {"ruff", "betterleaks", "semgrep", "osv-scanner"}
+    assert {s.name for s in registry.implemented()} == {
+        "ruff",
+        "betterleaks",
+        "semgrep",
+        "osv-scanner",
+    }
 
 
 def test_categories_are_routed_correctly() -> None:

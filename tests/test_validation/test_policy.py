@@ -93,6 +93,8 @@ def test_analysis_error_fails_closed() -> None:
         },
         errors=True,
     )
+
+
 def test_new_high_finding_fails_when_blocking_new_vulnerabilities():
     diff = """\
 diff --git a/fixture.py b/fixture.py
@@ -153,7 +155,7 @@ def test_finding_without_line_is_treated_as_new():
             "fail_on": ["critical", "high"],
             "block_secrets": True,
             "fail_closed": True,
-            "block_new_vulnerabilities": True
+            "block_new_vulnerabilities": True,
         },
         diff="",
     )

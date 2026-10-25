@@ -54,7 +54,14 @@ def py_file(tmp_path: Path) -> Path:
 
 def test_ruff_finding_is_normalized(monkeypatch, py_file) -> None:
     stdout = json.dumps(
-        [{"filename": str(py_file), "location": {"row": 3, "column": 1}, "code": "F401", "message": "unused import"}]
+        [
+            {
+                "filename": str(py_file),
+                "location": {"row": 3, "column": 1},
+                "code": "F401",
+                "message": "unused import",
+            }
+        ]
     )
     _patch_runner(monkeypatch, _proc(returncode=1, stdout=stdout))
 
