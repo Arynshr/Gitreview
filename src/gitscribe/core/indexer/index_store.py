@@ -23,6 +23,8 @@ from gitscribe.core.indexer.embedder import (
 from gitscribe.core.indexer.graph_builder import SymbolResolver, build_edges
 from gitscribe.core.indexer.merkle import IndexRunResult
 from gitscribe.core.indexer.parser import discover_python_files, parse_file
+from gitscribe.core.progress import phase, progress
+from gitscribe.events import Emitter
 
 INDEX_DB_PATH = Path.cwd() / "Storage" / "gitscribe_index.db"
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
@@ -82,7 +84,10 @@ def search(query: str, cfg: dict, top_k: int = 10) -> list[SearchResult]:
     ).fetchall()
     conn.close()
 
-    scored = [(row, cosine_similarity(query_vec, blob_to_vector(row["vector"]))) for row in rows]
+    scored = [
+        (row, cosine_similarity(query_vec, blob_to_vector(row["vector"])))
+        for row in rows
+    ]
     scored.sort(key=lambda pair: pair[1], reverse=True)
 
     return [
@@ -96,7 +101,6 @@ def search(query: str, cfg: dict, top_k: int = 10) -> list[SearchResult]:
         )
         for row, score in scored[:top_k]
     ]
-
 
 _CALLEE_CTE = """
 WITH RECURSIVE reach(id, depth) AS (
@@ -163,14 +167,9 @@ def symbol_at(file: str, lineno: int) -> SearchResult | None:
     if row is None:
         return None
     return SearchResult(
-        symbol_id=row["id"],
-        name=row["name"],
-        kind=row["kind"],
-        file=row["file"],
-        lineno=row["lineno"],
-        score=0.0,
+        symbol_id=row["id"], name=row["name"], kind=row["kind"],
+        file=row["file"], lineno=row["lineno"], score=0.0,
     )
-
 
 def needs_reindex(repo_root: str = ".") -> bool:
     conn = _get_connection()
@@ -206,7 +205,6 @@ def _delete_symbols_for_files(conn, paths: set[str]) -> None:
     conn.execute(f"DELETE FROM symbols WHERE id IN ({id_placeholders})", ids)
     conn.commit()
 
-
 def _symbol_like(row) -> SimpleNamespace:
     return SimpleNamespace(name=row["name"], file=row["file"], kind=row["kind"])
 
@@ -234,85 +232,109 @@ def _reresolve_unresolved_edges(conn) -> None:
     conn.commit()
 
 
-def reindex(repo_root: str, cfg: dict, force: bool = False) -> IndexRunResult:
+def _scope_predicate(paths: list[str]):
+    """True for files equal to, or under, any of `paths` (resolved, so it is
+    independent of how repo_root/file paths were spelled)."""
+    roots = [Path(p).resolve() for p in paths]
+
+    def in_scope(file: str) -> bool:
+        resolved = Path(file).resolve()
+        return any(resolved == r or r in resolved.parents for r in roots)
+
+    return in_scope
+
+
+def reindex(
+    repo_root: str,
+    cfg: dict,
+    force: bool = False,
+    paths: list[str] | None = None,
+    emitter: Emitter | None = None,
+) -> IndexRunResult:
+    """`paths` limits the run to those files/folders. Everything outside the
+    scope is left untouched (never treated as removed), and a scoped run is
+    recorded with a `scoped:` root hash so it can't make a later full run
+    wrongly skip itself."""
     start = time.perf_counter()
     conn = _get_connection()
     init_schema()
     merkle.ensure_migrated(conn)
+    in_scope = _scope_predicate(paths) if paths else None
 
-    files = discover_python_files(repo_root)
-    current = merkle.compute_leaf_hashes(files)
-    root_hash = merkle.compute_root_hash(current)
+    with phase(emitter, "discover") as info:
+        files = [f for f in discover_python_files(repo_root) if in_scope is None or in_scope(f)]
+        info["files"] = len(files)
 
-    if not force and merkle.get_last_root_hash(conn) == root_hash:
+    with phase(emitter, "hash"):
+        current = merkle.compute_leaf_hashes(files)
+        root_hash = merkle.compute_root_hash(current)
+        if in_scope:
+            root_hash = f"scoped:{root_hash}"
+
+    if not force and in_scope is None and merkle.get_last_root_hash(conn) == root_hash:
         conn.close()
-        return IndexRunResult(
-            files_changed=0, files_skipped=len(files), duration_s=0.0, skipped_entirely=True
-        )
+        return IndexRunResult(files_changed=0, files_skipped=len(files), duration_s=0.0, skipped_entirely=True)
 
-    diff = merkle.diff_against_stored(conn, current)
+    diff = merkle.diff_against_stored(conn, current, in_scope)
     if force:
         diff = merkle.HashDiff(changed=set(current), added=set(), removed=set())
 
+    if in_scope and diff.is_empty:
+        conn.close()
+        return IndexRunResult(files_changed=0, files_skipped=len(files), duration_s=0.0, skipped_entirely=True)
+
+    # sorted: symbol ids must not depend on set iteration order
+    touched = sorted(diff.touched)
     _delete_symbols_for_files(conn, diff.touched | diff.removed)
 
     new_symbols_with_ids: list[tuple[int, object]] = []
-    for path in diff.touched:
-        for sym in parse_file(path):
-            cur = conn.execute(
-                """INSERT INTO symbols (name, kind, file, lineno, end_lineno, parent, file_hash)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    sym.name,
-                    sym.kind,
-                    sym.file,
-                    sym.lineno,
-                    sym.end_lineno,
-                    sym.parent,
-                    current[path],
-                ),
-            )
-            new_symbols_with_ids.append((cur.lastrowid, sym))
+    with phase(emitter, "parse") as info:
+        for i, path in enumerate(touched, 1):
+            progress(emitter, "parse", i, len(touched), path)
+            for sym in parse_file(path):
+                cur = conn.execute(
+                    """INSERT INTO symbols (name, kind, file, lineno, end_lineno, parent, file_hash)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (sym.name, sym.kind, sym.file, sym.lineno, sym.end_lineno, sym.parent, current[path]),
+                )
+                new_symbols_with_ids.append((cur.lastrowid, sym))
+        info["files"], info["symbols"] = len(touched), len(new_symbols_with_ids)
 
     if new_symbols_with_ids:
-        all_symbols = conn.execute("SELECT id, name, kind, file, parent FROM symbols").fetchall()
-        resolver = SymbolResolver([(r["id"], _symbol_like(r)) for r in all_symbols])
-        file_by_sid = {sid: sym.file for sid, sym in new_symbols_with_ids}
-        edges = build_edges(new_symbols_with_ids)
-        for e in edges:
-            source_file = file_by_sid.get(e.source_id, "")
-            target_id = resolver.resolve(e.target_name, source_file)
-            conn.execute(
-                """INSERT INTO edges (source_id, target_id, target_name, edge_type, resolved)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (e.source_id, target_id, e.target_name, e.edge_type, target_id is not None),
-            )
-        conn.commit()
-
-        embeddable = [
-            (sid, sym)
-            for sid, sym in new_symbols_with_ids
-            if sym.kind in ("function", "class", "method")
-        ]
-        if embeddable:
-            vectors = embed_symbols([s for _, s in embeddable], cfg)
-            model_name = cfg.get("embedding", {}).get("model", "all-MiniLM-L6-v2")
-            for (sid, _), vec in zip(embeddable, vectors, strict=True):
+        with phase(emitter, "link") as info:
+            all_symbols = conn.execute("SELECT id, name, kind, file, parent FROM symbols").fetchall()
+            resolver = SymbolResolver([(r["id"], _symbol_like(r)) for r in all_symbols])
+            file_by_sid = {sid: sym.file for sid, sym in new_symbols_with_ids}
+            edges = build_edges(new_symbols_with_ids)
+            for e in edges:
+                source_file = file_by_sid.get(e.source_id, "")
+                target_id = resolver.resolve(e.target_name, source_file)
                 conn.execute(
-                    """INSERT INTO embeddings (symbol_id, vector, model) VALUES (?, ?, ?)
-                       ON CONFLICT(symbol_id) DO UPDATE SET vector = excluded.vector, model = excluded.model""",
-                    (sid, vector_to_blob(vec), model_name),
+                    """INSERT INTO edges (source_id, target_id, target_name, edge_type, resolved)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (e.source_id, target_id, e.target_name, e.edge_type, target_id is not None),
                 )
             conn.commit()
+            info["edges"] = len(edges)
 
-    _reresolve_unresolved_edges(conn)
-    merkle.sync_file_hashes(conn, diff, current)
-    merkle.record_run(
-        conn,
-        root_hash,
-        files_changed=len(diff.touched),
-        files_skipped=len(files) - len(diff.touched),
-    )
+        embeddable = [(sid, sym) for sid, sym in new_symbols_with_ids if sym.kind in ("function", "class", "method")]
+        if embeddable:
+            with phase(emitter, "embed") as info:
+                vectors = embed_symbols([s for _, s in embeddable], cfg)
+                model_name = cfg.get("embedding", {}).get("model", "all-MiniLM-L6-v2")
+                for (sid, _), vec in zip(embeddable, vectors, strict=True):
+                    conn.execute(
+                        """INSERT INTO embeddings (symbol_id, vector, model) VALUES (?, ?, ?)
+                           ON CONFLICT(symbol_id) DO UPDATE SET vector = excluded.vector, model = excluded.model""",
+                        (sid, vector_to_blob(vec), model_name),
+                    )
+                conn.commit()
+                info["symbols"] = len(embeddable)
+
+    with phase(emitter, "finalize"):
+        _reresolve_unresolved_edges(conn)
+        merkle.sync_file_hashes(conn, diff, current)
+        merkle.record_run(conn, root_hash, files_changed=len(diff.touched), files_skipped=len(files) - len(diff.touched))
     conn.close()
 
     return IndexRunResult(

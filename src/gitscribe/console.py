@@ -16,6 +16,14 @@ import typer
 
 PREFIX = "[gitscribe]"
 
+# `--stream json` owns stdout (NDJSON); human messages move to stderr.
+_STDERR = False
+
+
+def route_to_stderr(flag: bool) -> None:
+    global _STDERR
+    _STDERR = flag
+
 
 def error(message: str) -> None:
     typer.secho(f"{PREFIX} {message}", err=True, fg=typer.colors.RED)
@@ -26,13 +34,13 @@ def warn(message: str) -> None:
 
 
 def success(message: str) -> None:
-    typer.secho(f"{PREFIX} {message}", fg=typer.colors.GREEN)
+    typer.secho(f"{PREFIX} {message}", err=_STDERR, fg=typer.colors.GREEN)
 
 
 def info(message: str) -> None:
     """Neutral status message - no color, no prefix (matches existing
     plain-output commands like `generate`'s PR body)."""
-    typer.echo(message)
+    typer.echo(message, err=_STDERR)
 
 
 def line(message: str, severity: str = "info") -> None:
@@ -41,4 +49,4 @@ def line(message: str, severity: str = "info") -> None:
     CLI-level status messages on stderr. Use this for per-row output where
     the prefix would just be repeated noise."""
     colors = {"error": typer.colors.RED, "warning": typer.colors.YELLOW}
-    typer.secho(message, fg=colors.get(severity))
+    typer.secho(message, err=_STDERR, fg=colors.get(severity))
