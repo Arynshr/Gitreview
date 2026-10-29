@@ -24,18 +24,9 @@ def _finding(**overrides) -> Finding:
     """Local on purpose: this module has no conftest dependency, so it works
     wherever it is placed (tests/ or tests/test_validation/)."""
     data = {
-        "id": "t",
-        "source": "deterministic",
-        "category": "security",
-        "rule_id": "TEST",
-        "severity": "high",
-        "confidence": "high",
-        "file": "a.py",
-        "line": 1,
-        "message": "test finding",
-        "evidence": "e",
-        "remediation": "r",
-        "sources": ["deterministic"],
+        "id": "t", "source": "deterministic", "category": "security", "rule_id": "TEST",
+        "severity": "high", "confidence": "high", "file": "a.py", "line": 1,
+        "message": "test finding", "evidence": "e", "remediation": "r", "sources": ["deterministic"],
     }
     return Finding(**{**data, **overrides})
 
@@ -63,6 +54,7 @@ def stub_run(monkeypatch):
     def install(result: ValidationResult, events=EVENTS) -> dict:
         def fake(base, head, cfg, **kw):
             seen["emitter"] = kw.get("emitter")
+            seen["kw"] = kw
             for kind, data in events:
                 if kw.get("emitter"):
                     kw["emitter"](Event(kind, data))
@@ -79,9 +71,7 @@ def _invoke(app, *args):
 
 
 def test_stream_json_emits_events_then_a_result_line(app, stub_run) -> None:
-    stub_run(
-        ValidationResult(status="FAIL", findings=[_finding()], diagnostics={"gate_reason": "r"})
-    )
+    stub_run(ValidationResult(status="FAIL", findings=[_finding()], diagnostics={"gate_reason": "r"}))
 
     result = _invoke(app, "--stream", "json")
 
@@ -121,11 +111,7 @@ def test_json_output_stays_machine_readable_and_disables_streaming(app, stub_run
 
 def test_diff_view_annotates_findings_inline(app, stub_run, monkeypatch) -> None:
     stub_run(ValidationResult(status="FAIL", findings=[_finding(line=1, message="inline-me")]))
-    monkeypatch.setattr(
-        cli,
-        "resolve_change",
-        lambda **kw: ChangeContext(base="base", head="head", diff=DIFF, files=["a.py"]),
-    )
+    monkeypatch.setattr(cli, "resolve_change", lambda **kw: ChangeContext(base="base", head="head", diff=DIFF, files=["a.py"]))
 
     result = _invoke(app, "--view", "diff")
 
@@ -140,3 +126,37 @@ def test_invalid_option_values_exit_with_a_clear_message(app, stub_run, args) ->
     result = _invoke(app, *args)
 
     assert result.exit_code == 1 and "--stream must be" in result.output
+
+
+def test_empty_range_says_so_and_names_the_range(app, stub_run) -> None:
+    stub_run(ValidationResult(status="PASS"), events=[])
+
+    result = _invoke(app)
+
+    assert "nothing to verify" in result.stdout and "origin/main...HEAD" in result.stdout
+    assert "--staged" in result.stdout and result.exit_code == 0
+
+
+@pytest.mark.parametrize("flag,label", [("--staged", "staged changes"), ("--working", "working tree")])
+def test_scope_flags_reach_the_run_and_the_report(app, stub_run, flag, label) -> None:
+    seen = stub_run(ValidationResult(status="PASS"), events=[])
+
+    result = _invoke(app, flag)
+
+    assert seen["kw"]["scope"] == flag.lstrip("-") and label in result.stdout
+
+
+def test_default_run_passes_no_scope_kwarg(app, stub_run) -> None:
+    seen = stub_run(ValidationResult(status="PASS"), events=[])
+
+    _invoke(app)
+
+    assert "scope" not in seen["kw"]  # unchanged call shape for the committed-range path
+
+
+def test_staged_and_working_are_mutually_exclusive(app, stub_run) -> None:
+    stub_run(ValidationResult(status="PASS"))
+
+    result = _invoke(app, "--staged", "--working")
+
+    assert result.exit_code == 1 and "mutually exclusive" in result.output

@@ -5,8 +5,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
-
 from gitscribe.core import validation_bridge
 from gitscribe.validation.models import AnalysisError, ValidationResult
 

@@ -7,8 +7,6 @@ that the gate reason surfaced in events matches the result.
 
 from __future__ import annotations
 
-import pytest
-
 from gitscribe.validation.deterministic import DETERMINISTIC_RUNNERS, DeterministicAnalysisError
 from gitscribe.validation.events import Event
 from gitscribe.validation.graph import run_validation_sync
