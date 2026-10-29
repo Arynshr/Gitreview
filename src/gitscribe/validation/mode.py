@@ -26,7 +26,7 @@ def resolve_file_modes(
         mode = default_mode
 
         for rule in file_rules:
-            selector = pathspec.PathSpec.from_lines("gitwildmatch", [rule["path"]])
+            selector = pathspec.PathSpec.from_lines("gitignore", [rule["path"]])
 
             if selector.match_file(file):
                 mode = rule["mode"]

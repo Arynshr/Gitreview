@@ -1,7 +1,6 @@
 """
 Deterministic node: extracts and filters git diff.
 """
-
 import subprocess
 from pathlib import Path
 
@@ -15,13 +14,11 @@ DEFAULT_IGNORE_PATTERNS = ["*.lock", "package-lock.json", "*.min.js", "poetry.lo
 
 class GitCommandError(RuntimeError):
     """Raised when a required git command fails — no origin/main, shallow
-    clone, detached HEAD with no upstream, fork PR, etc.
+    clone, detached HEAD with no upstream, fork PR, etc. 
     """
 
 
-def load_ignore_spec(
-    repo_root: str = ".", extra_patterns: list[str] | None = None
-) -> pathspec.PathSpec:
+def load_ignore_spec(repo_root: str = ".", extra_patterns: list[str] | None = None) -> pathspec.PathSpec:
     """Build a gitignore-aware matcher from .gitignore + config-supplied extras."""
     gitignore_path = Path(repo_root) / ".gitignore"
     lines = []
@@ -39,7 +36,7 @@ def load_ignore_spec(
 def _run_git(args: list[str], cwd: str | Path | None = None) -> str:
     """`cwd` lets callers run git against a different working tree (e.g. a
     disposable merge-preview worktree) without a second git-wrapper existing
-    elsewhere in the codebase.
+    elsewhere in the codebase. 
     """
     result = subprocess.run(["git", *args], capture_output=True, text=True, cwd=cwd)
     if result.returncode != 0:
@@ -53,14 +50,24 @@ def get_raw_diff(
     base: str = "origin/main",
     head: str = "HEAD",
     paths: list[str] | None = None,
+    scope: str = "range",
 ) -> str:
-    """`paths`, when given, scopes the diff to those files only (`git diff -- <paths>`).
+    """`scope`: "range" (default, committed `base...head`), "staged" (index vs
+    HEAD) or "working" (working tree vs HEAD) - the last two cover work that
+    isn't committed yet.
+
+    `paths`, when given, scopes the diff to those files only (`git diff -- <paths>`).
 
     Used to re-fetch a minimal diff after a file selection has been resolved,
     so downstream stages (esp. the AI review prompt) aren't paying token cost
     for files outside the selected scope.
     """
-    args = ["diff", f"{base}...{head}"]
+    if scope == "staged":
+        args = ["diff", "--cached"]
+    elif scope == "working":
+        args = ["diff", "HEAD"]
+    else:
+        args = ["diff", f"{base}...{head}"]
     if paths:
         args.append("--")
         args.extend(paths)
@@ -90,7 +97,8 @@ def extract_files_changed(diff_text: str) -> list[str]:
 
 
 def diff_parser_node(state: GitScribeState, cfg: dict) -> dict:
-    """LangGraph node: returns partial update with raw_diff, commit_messages, files_changed."""
+    """LangGraph node: returns partial update with raw_diff, commit_messages, files_changed.
+    """
     raw_diff = state.raw_diff or get_raw_diff()
     commit_messages = state.commit_messages or get_commit_messages()
 

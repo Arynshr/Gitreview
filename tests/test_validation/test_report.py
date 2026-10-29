@@ -27,13 +27,8 @@ def _text(console: Console) -> str:
 
 
 def _result(findings=(), errors=(), status="FAIL", **diagnostics) -> ValidationResult:
-    return ValidationResult(
-        status=status,
-        findings=list(findings),
-        errors=list(errors),
-        timings={"total_s": 1.2},
-        diagnostics=diagnostics,
-    )
+    return ValidationResult(status=status, findings=list(findings), errors=list(errors), timings={"total_s": 1.2},
+                            diagnostics=diagnostics)
 
 
 # --- summary ---------------------------------------------------------------
@@ -41,10 +36,8 @@ def _result(findings=(), errors=(), status="FAIL", **diagnostics) -> ValidationR
 
 def test_banner_shows_status_reason_and_counts(make_finding) -> None:
     c = _console()
-    result = _result(
-        [make_finding(severity="high"), make_finding(severity="low", line=2)],
-        gate_reason="high finding from TEST",
-    )
+    result = _result([make_finding(severity="high"), make_finding(severity="low", line=2)],
+                     gate_reason="high finding from TEST")
 
     report.render_summary(result, c)
 
@@ -79,9 +72,7 @@ def test_findings_are_grouped_by_file_and_ordered_by_severity(make_finding) -> N
 
 def test_top_risk_files_rank_by_weighted_severity(make_finding) -> None:
     c = _console()
-    findings = [make_finding(file="low.py", severity="low")] + [
-        make_finding(file="hot.py", severity="critical")
-    ]
+    findings = [make_finding(file="low.py", severity="low")] + [make_finding(file="hot.py", severity="critical")]
 
     report.render_summary(_result(findings), c)
 
@@ -99,24 +90,23 @@ def test_long_evidence_is_truncated_unless_debug(make_finding, debug, truncated)
     assert (_text(c).count("Q") < 400) is truncated
 
 
-def test_scanner_health_distinguishes_ok_error_and_skipped(make_finding) -> None:
+def test_scanner_health_distinguishes_ok_error_unavailable_and_not_needed(make_finding) -> None:
     c = _console()
     result = _result(
         errors=[AnalysisError(source="semgrep", message="timed out")],
         jobs=["ruff", "semgrep"],
-        scanner_health={"ruff": None, "semgrep": None, "osv-scanner": "binary missing"},
+        scanner_health={"ruff": None, "semgrep": None, "osv-scanner": "binary missing", "betterleaks": None},
     )
 
     report.render_summary(result, c)
 
     lines = _text(c).splitlines()
-    rows = {
-        n: next(line for line in lines if "│" in line and re.search(rf"\b{n}\b", line))
-        for n in ("ruff", "semgrep", "osv-scanner")
-    }
+    rows = {n: next(line for line in lines if "│" in line and re.search(rf"\b{n}\b", line))
+            for n in ("ruff", "semgrep", "osv-scanner", "betterleaks")}
     assert "ok" in rows["ruff"]
     assert "error" in rows["semgrep"] and "timed out" in rows["semgrep"]
-    assert "skipped" in rows["osv-scanner"] and "binary missing" in rows["osv-scanner"]
+    assert "unavailable" in rows["osv-scanner"] and "binary missing" in rows["osv-scanner"]
+    assert "not needed" in rows["betterleaks"]  # healthy but nothing to scan: still reported
 
 
 # --- diff view -------------------------------------------------------------
@@ -137,13 +127,7 @@ diff --git a/a.py b/a.py
 def test_parse_diff_tracks_new_line_numbers_and_removals() -> None:
     [hunk] = report._parse_diff(DIFF)["a.py"]
 
-    assert hunk == [
-        (" ", 1, "keep"),
-        ("-", None, "old"),
-        ("+", 2, "new"),
-        ("+", 3, "added"),
-        (" ", 4, "tail"),
-    ]
+    assert hunk == [(" ", 1, "keep"), ("-", None, "old"), ("+", 2, "new"), ("+", 3, "added"), (" ", 4, "tail")]
 
 
 def test_parse_diff_ignores_new_files_deleted_to_dev_null() -> None:
@@ -165,10 +149,7 @@ def test_finding_is_annotated_directly_under_its_line(make_finding) -> None:
 
 def test_findings_outside_changed_lines_are_listed_separately(make_finding) -> None:
     c = _console()
-    findings = [
-        make_finding(file="other.py", line=9, message="elsewhere"),
-        make_finding(line=None, message="repo-wide"),
-    ]
+    findings = [make_finding(file="other.py", line=9, message="elsewhere"), make_finding(line=None, message="repo-wide")]
 
     report.render_diff(_result(findings), DIFF, c)
 
@@ -192,20 +173,8 @@ def test_distant_context_is_elided() -> None:
     diff = f"diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1,20 +1,20 @@\n{body}"
     from gitscribe.validation.models import Finding
 
-    finding = Finding(
-        id="x",
-        source="deterministic",
-        category="c",
-        rule_id="R",
-        severity="high",
-        confidence="high",
-        file="a.py",
-        line=10,
-        message="m",
-        evidence="",
-        remediation="",
-        sources=["deterministic"],
-    )
+    finding = Finding(id="x", source="deterministic", category="c", rule_id="R", severity="high", confidence="high",
+                      file="a.py", line=10, message="m", evidence="", remediation="", sources=["deterministic"])
     c = _console()
 
     report.render_diff(_result([finding]), diff, c)
@@ -227,21 +196,12 @@ def test_live_renderer_tracks_scanner_lifecycle_and_stops_at_gate() -> None:
     r = report.LiveRenderer(_console())
 
     _feed(r, ("plan.ready", {"jobs": ["ruff", "semgrep"]}))
-    assert r.live is not None and {n: v["state"] for n, v in r.rows.items()} == {
-        "ruff": "queued",
-        "semgrep": "queued",
-    }
+    assert r.live is not None and {n: v["state"] for n, v in r.rows.items()} == {"ruff": "queued", "semgrep": "queued"}
 
-    _feed(
-        r,
-        ("scanner.started", {"scanner": "ruff"}),
-        ("finding.found", {"severity": "high"}),
-        ("scanner.finished", {"scanner": "ruff", "findings": 1, "seconds": 0.4, "error": None}),
-        (
-            "scanner.finished",
-            {"scanner": "semgrep", "findings": 0, "seconds": 0.1, "error": "down"},
-        ),
-    )
+    _feed(r, ("scanner.started", {"scanner": "ruff"}),
+          ("finding.found", {"severity": "high"}),
+          ("scanner.finished", {"scanner": "ruff", "findings": 1, "seconds": 0.4, "error": None}),
+          ("scanner.finished", {"scanner": "semgrep", "findings": 0, "seconds": 0.1, "error": "down"}))
     assert r.rows["ruff"]["state"] == "done" and r.rows["semgrep"]["state"] == "error"
     assert r.sev["high"] == 1
 
@@ -267,3 +227,13 @@ def test_ndjson_emitter_writes_one_parsable_object_per_event() -> None:
     parsed = [json.loads(line) for line in sink.getvalue().splitlines()]
     assert [p["type"] for p in parsed] == ["plan.ready", "gate.decision"]
     assert parsed[0]["jobs"] == ["ruff"]
+
+
+def test_empty_change_is_stated_explicitly_not_reported_as_silence() -> None:
+    c = _console()
+
+    report.render_summary(_result(status="PASS"), c, scope_label="origin/main...HEAD")
+
+    out = _text(c)
+    assert "nothing to verify" in out and "origin/main...HEAD" in out and "--staged" in out
+    assert "Scanner health" not in out  # nothing ran, no empty table

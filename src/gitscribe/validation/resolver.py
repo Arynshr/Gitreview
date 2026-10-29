@@ -16,12 +16,13 @@ def resolve_change(
     head: str,
     extra_ignore_patterns: list[str] | None = None,
     paths: list[str] | None = None,
+    scope: str = "range",
 ) -> ChangeContext:
     """`paths`, when given (e.g. from `verify --path`), restricts the resolved
     change to changed files matching those literal paths/globs. Raises if the
     selection matches nothing, rather than silently reviewing everything.
     """
-    diff = get_raw_diff(base=base, head=head)
+    diff = get_raw_diff(base=base, head=head, scope=scope)
 
     files = extract_files_changed(diff)
 
@@ -32,7 +33,7 @@ def resolve_change(
     files = filter_ignored_files(files, spec)
 
     if paths:
-        selector = pathspec.PathSpec.from_lines("gitwildmatch", paths)
+        selector = pathspec.PathSpec.from_lines("gitignore", paths)
         matched = [f for f in files if selector.match_file(f)]
 
         if not matched:
@@ -42,7 +43,12 @@ def resolve_change(
             )
 
         files = matched
-        diff = get_raw_diff(base=base, head=head, paths=files)
+        diff = get_raw_diff(base=base, head=head, paths=files, scope=scope)
+
+    if scope == "staged":
+        base, head = "HEAD", "INDEX"
+    elif scope == "working":
+        base, head = "HEAD", "WORKTREE"
 
     return ChangeContext(
         base=base,

@@ -23,10 +23,7 @@ from gitscribe.config_locator import find_config_path
 # code is. `sandbox` previously wasn't reachable from any import path the
 # real CLI actually takes, which is why `gitscribe sandbox` didn't exist
 # despite validation/sandbox.py being correct in isolation.
-from gitscribe.validation import (
-    report,
-    sandbox as _sandbox,  # noqa: F401
-)
+from gitscribe.validation import sandbox as _sandbox  # noqa: F401
 from gitscribe.validation.analysis.registry import build_default_registry
 from gitscribe.validation.checkpoint import load_reusable, save_latest
 from gitscribe.validation.config import (
@@ -46,9 +43,13 @@ from gitscribe.validation.models import (
 from gitscribe.validation.orchestrator import (
     validate_change,
 )
+from gitscribe.validation.policy import (
+    sort_findings,
+)
 from gitscribe.validation.resolver import (
     resolve_change,
 )
+from gitscribe.validation import report
 from gitscribe.validation.sarif import to_sarif
 
 
@@ -64,7 +65,10 @@ def _default_new_branch_base() -> str:
         check=False,
     )
 
-    if result.returncode == 0 and result.stdout.strip():
+    if (
+        result.returncode == 0
+        and result.stdout.strip()
+    ):
         return result.stdout.strip().replace(
             "refs/remotes/",
             "",
@@ -127,6 +131,7 @@ def _report(
     debug: bool,
     view: str = "summary",
     diff: str = "",
+    scope_label: str = "",
 ) -> None:
     if as_json:
         typer.echo(result.model_dump_json(indent=2))
@@ -137,7 +142,7 @@ def _report(
     if view == "diff" and diff:
         report.render_diff(result, diff, console)
 
-    report.render_summary(result, console, debug)
+    report.render_summary(result, console, debug, scope_label=scope_label)
 
 
 def _run_one(
@@ -149,6 +154,7 @@ def _run_one(
     force_mode: str | None = None,
     sandboxed: bool = False,
     emitter=None,
+    scope: str = "range",
 ) -> ValidationResult:
     # Caching only applies to whole-change reviews (no --path/--mode
     # narrowing): a partial ad-hoc review isn't something a hook would
@@ -157,7 +163,7 @@ def _run_one(
     # scope's result. Reuse is further gated on a clean working tree (see
     # validation/checkpoint.py) since the deterministic/AI passes read
     # files off disk, not git blobs.
-    cacheable = paths is None and force_mode is None
+    cacheable = paths is None and force_mode is None and scope == "range"
 
     if cacheable:
         cached = load_reusable(cfg, base, head, sandboxed, force_ai)
@@ -172,6 +178,7 @@ def _run_one(
             [],
         ),
         paths=paths,
+        **({"scope": scope} if scope != "range" else {}),
     )
 
     result = validate_change(
@@ -198,9 +205,14 @@ def register_verify_command(
     ]
     | None = None,
 ) -> None:
-    loader = config_loader or load_validation_config
+    loader = (
+        config_loader
+        or load_validation_config
+    )
 
-    @command_app.command(name="verify")
+    @command_app.command(
+        name="verify"
+    )
     def verify(
         base: str = typer.Option(
             "origin/main",
@@ -213,7 +225,10 @@ def register_verify_command(
         pre_push: bool = typer.Option(
             False,
             "--pre-push",
-            help=("Read Git pre-push ref updates from stdin."),
+            help=(
+                "Read Git pre-push "
+                "ref updates from stdin."
+            ),
         ),
         pre_merge: bool = typer.Option(
             False,
@@ -227,7 +242,10 @@ def register_verify_command(
         install_hook: bool = typer.Option(
             False,
             "--install-hook",
-            help=("Install or safely upgrade the GitScribe pre-push and pre-merge-commit hooks."),
+            help=(
+                "Install or safely upgrade the GitScribe pre-push and "
+                "pre-merge-commit hooks."
+            ),
         ),
         uninstall_hook: bool = typer.Option(
             False,
@@ -267,6 +285,16 @@ def register_verify_command(
             "--agentic",
             hidden=True,
             help="Deprecated alias for --force-agentic.",
+        ),
+        staged: bool = typer.Option(
+            False,
+            "--staged",
+            help="Verify staged (about-to-commit) changes instead of the committed base...head range.",
+        ),
+        working: bool = typer.Option(
+            False,
+            "--working",
+            help="Verify all uncommitted changes (working tree vs HEAD).",
         ),
         path: list[str] = typer.Option(
             None,
@@ -343,10 +371,16 @@ def register_verify_command(
                     str(exc),
                     err=True,
                 )
-                raise typer.Exit(1) from exc
+                raise typer.Exit(
+                    1
+                ) from exc
 
-            typer.echo(f"pre-push hook: {push_message}")
-            typer.echo(f"pre-merge-commit hook: {merge_message}")
+            typer.echo(
+                f"pre-push hook: {push_message}"
+            )
+            typer.echo(
+                f"pre-merge-commit hook: {merge_message}"
+            )
             return
 
         if uninstall_hook:
@@ -369,7 +403,8 @@ def register_verify_command(
 
         if agentic and not force_agentic:
             typer.echo(
-                "note: --agentic is deprecated, use --force-agentic instead (same behavior).",
+                "note: --agentic is deprecated, use --force-agentic instead "
+                "(same behavior).",
                 err=True,
             )
             force_agentic = True
@@ -436,8 +471,21 @@ def register_verify_command(
                 raise typer.Exit(1) from exc
 
             if not cfg.get("enabled", True):
-                typer.echo("GitScribe validation is disabled by configuration.")
+                typer.echo(
+                    "GitScribe validation is disabled by configuration."
+                )
                 return
+
+        if staged and working:
+            typer.echo("--staged and --working are mutually exclusive.", err=True)
+            raise typer.Exit(1)
+        scope = "staged" if staged else "working" if working else "range"
+        scope_extra = {"scope": scope} if scope != "range" else {}
+        scope_label = {
+            "range": f"{base}...{head}",
+            "staged": "staged changes",
+            "working": "the working tree (vs HEAD)",
+        }[scope]
 
         if stream not in ("auto", "live", "json", "off") or view not in ("summary", "diff"):
             typer.echo("--stream must be auto|live|json|off and --view summary|diff.", err=True)
@@ -454,7 +502,9 @@ def register_verify_command(
                 emitter = live
 
         started = time.perf_counter()
-        results: list[ValidationResult] = []
+        results: list[
+            ValidationResult
+        ] = []
 
         try:
             if pre_push:
@@ -467,7 +517,9 @@ def register_verify_command(
 
             if not ranges:
                 typer.echo(
-                    "no merge in progress" if pre_merge else "no push updates require validation"
+                    "no merge in progress"
+                    if pre_merge
+                    else "no push updates require validation"
                 )
                 return
 
@@ -487,7 +539,8 @@ def register_verify_command(
 
                     if not range_cfg.get("enabled", True):
                         typer.echo(
-                            f"GitScribe validation is disabled by configuration at {range_base}."
+                            f"GitScribe validation is disabled by "
+                            f"configuration at {range_base}."
                         )
                         continue
                 else:
@@ -503,6 +556,7 @@ def register_verify_command(
                         force_mode=mode,
                         sandboxed=sandboxed,
                         emitter=emitter,
+                        **scope_extra,
                     )
                 )
 
@@ -517,7 +571,12 @@ def register_verify_command(
                         message=str(exc),
                     )
                 ],
-                timings={"total_s": (time.perf_counter() - started)},
+                timings={
+                    "total_s": (
+                        time.perf_counter()
+                        - started
+                    )
+                },
             )
 
             _report(
@@ -526,11 +585,18 @@ def register_verify_command(
                 debug,
             )
 
-            raise typer.Exit(1) from exc
+            raise typer.Exit(
+                1
+            ) from exc
 
         merged_findings = []
         errors = []
-        timings = {"total_s": (time.perf_counter() - started)}
+        timings = {
+            "total_s": (
+                time.perf_counter()
+                - started
+            )
+        }
 
         health: dict[str, object] = {}
         jobs: list[str] = []
@@ -538,9 +604,13 @@ def register_verify_command(
         for result in results:
             health.update(result.diagnostics.get("scanner_health", {}))
             jobs.extend(j for j in result.diagnostics.get("jobs", []) if j not in jobs)
-            merged_findings.extend(result.findings)
+            merged_findings.extend(
+                result.findings
+            )
 
-            errors.extend(result.errors)
+            errors.extend(
+                result.errors
+            )
 
             for (
                 key,
@@ -555,7 +625,15 @@ def register_verify_command(
                 )
 
         final = ValidationResult(
-            status=("FAIL" if any(result.status == "FAIL" for result in results) else "PASS"),
+            status=(
+                "FAIL"
+                if any(
+                    result.status
+                    == "FAIL"
+                    for result in results
+                )
+                else "PASS"
+            ),
             findings=merged_findings,
             errors=errors,
             timings=timings,
@@ -563,9 +641,7 @@ def register_verify_command(
                 "scanner_health": health,
                 "jobs": jobs,
                 "gate_reason": "; ".join(
-                    r.diagnostics["gate_reason"]
-                    for r in results
-                    if r.diagnostics.get("gate_reason")
+                    r.diagnostics["gate_reason"] for r in results if r.diagnostics.get("gate_reason")
                 ),
             },
         )
@@ -576,26 +652,24 @@ def register_verify_command(
         diff_text = ""
         if view == "diff" and not hook_triggered:
             diff_text = resolve_change(
-                base=base,
-                head=head,
+                base=base, head=head,
                 extra_ignore_patterns=(cfg or {}).get("ignore_patterns", []),
                 paths=path or None,
+                **scope_extra,
             ).diff
 
         if stream == "json" and not hook_triggered and not as_json:
-            typer.echo(
-                json.dumps(
-                    {
-                        "type": "result",
-                        "status": final.status,
-                        "findings": [f.model_dump() for f in final.findings],
-                        "errors": [e.model_dump() for e in final.errors],
-                        "gate_reason": final.diagnostics.get("gate_reason", ""),
-                    }
-                )
-            )
+            typer.echo(json.dumps({
+                "type": "result",
+                "status": final.status,
+                "findings": [f.model_dump() for f in final.findings],
+                "errors": [e.model_dump() for e in final.errors],
+                "gate_reason": final.diagnostics.get("gate_reason", ""),
+                "scanners": final.diagnostics.get("jobs", []),
+                "scope": scope_label,
+            }))
         else:
-            _report(final, as_json, debug, view=view, diff=diff_text)
+            _report(final, as_json, debug, view=view, diff=diff_text, scope_label=scope_label)
 
         if sarif:
             Path(sarif).write_text(to_sarif(final), encoding="utf-8")

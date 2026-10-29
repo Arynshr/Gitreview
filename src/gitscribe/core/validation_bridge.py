@@ -27,7 +27,7 @@ from gitscribe.validation.policy import sort_findings
 _MAX_SURFACED = 10
 
 
-def validate_node(state: GitScribeState, cfg: dict) -> dict:
+def validate_node(state: GitScribeState, cfg: dict, emitter=None) -> dict:
     validation_cfg = cfg.get("validation", {})
 
     if not validation_cfg.get("enabled", True):
@@ -43,7 +43,9 @@ def validate_node(state: GitScribeState, cfg: dict) -> dict:
     )
 
     try:
-        result_state = run_validation_sync(request, validation_cfg)
+        # only pass the kwarg when streaming: keeps the plain call shape stable
+        extra = {"emitter": emitter} if emitter is not None else {}
+        result_state = run_validation_sync(request, validation_cfg, **extra)
     except Exception as exc:
         return {
             "validation_status": "ERROR",
@@ -61,9 +63,7 @@ def validate_node(state: GitScribeState, cfg: dict) -> dict:
         + "".join(f"; {e.source}: {e.message}" for e in result.errors[:3])
     )
 
-    surfaced: list[tuple[str, str]] = [
-        ("error", f"{e.source}: {e.message}"[:200]) for e in result.errors
-    ]
+    surfaced: list[tuple[str, str]] = [("error", f"{e.source}: {e.message}"[:200]) for e in result.errors]
     for f in sort_findings(result.findings):
         loc = f"{f.file}:{f.line}" if f.file and f.line else (f.file or "(repository)")
         surfaced.append((f.severity, f"{loc} - {f.message}"[:200]))

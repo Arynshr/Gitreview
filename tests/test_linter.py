@@ -1,7 +1,10 @@
 import json
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from gitscribe.core.analysis.linter import (
+    RuffError,
     findings_by_file,
     run_ruff,
     severity_score,
@@ -15,6 +18,7 @@ def fake_ruff_output(items):
 @patch("gitscribe.core.analysis.linter.subprocess.run")
 def test_run_ruff_parses_findings(mock_run):
     mock_run.return_value = MagicMock(
+        returncode=1,
         stdout=fake_ruff_output(
             [
                 {
@@ -37,6 +41,7 @@ def test_run_ruff_parses_findings(mock_run):
 @patch("gitscribe.core.analysis.linter.subprocess.run")
 def test_run_ruff_warning_severity(mock_run):
     mock_run.return_value = MagicMock(
+        returncode=1,
         stdout=fake_ruff_output(
             [{"filename": "a.py", "location": {"row": 1}, "code": "UP006", "message": "use list"}]
         )
@@ -47,14 +52,39 @@ def test_run_ruff_warning_severity(mock_run):
 
 @patch("gitscribe.core.analysis.linter.subprocess.run")
 def test_run_ruff_empty_output(mock_run):
-    mock_run.return_value = MagicMock(stdout="")
+    mock_run.return_value = MagicMock(returncode=0, stdout="")
     assert run_ruff(".") == []
 
 
 @patch("gitscribe.core.analysis.linter.subprocess.run")
-def test_run_ruff_malformed_json_does_not_raise(mock_run):
-    mock_run.return_value = MagicMock(stdout="not json")
-    assert run_ruff(".") == []
+def test_run_ruff_malformed_json_is_reported_not_swallowed(mock_run):
+    # regression: this used to return [] and the CLI printed "no findings"
+    mock_run.return_value = MagicMock(returncode=1, stdout="not json")
+    with pytest.raises(RuffError, match="could not parse"):
+        run_ruff(".")
+
+
+@patch("gitscribe.core.analysis.linter.subprocess.run")
+def test_run_ruff_crash_surfaces_stderr(mock_run):
+    mock_run.return_value = MagicMock(returncode=2, stdout="", stderr="invalid config: bad key")
+    with pytest.raises(RuffError, match="bad key"):
+        run_ruff(".")
+
+
+@patch("gitscribe.core.analysis.linter.subprocess.run")
+def test_run_ruff_marks_fixable_findings_and_scopes_to_paths(mock_run):
+    mock_run.return_value = MagicMock(
+        returncode=1,
+        stdout=fake_ruff_output([
+            {"filename": "a.py", "location": {"row": 3, "column": 5}, "code": "F401", "message": "m", "fix": {"edits": []}},
+            {"filename": "a.py", "location": {"row": 4, "column": 1}, "code": "E501", "message": "n", "fix": None},
+        ]),
+    )
+
+    findings = run_ruff(".", paths=["pkg"])
+
+    assert [(f.col, f.fixable) for f in findings] == [(5, True), (1, False)]
+    assert mock_run.call_args.args[0][:3] == ["ruff", "check", "pkg"]
 
 
 def test_findings_by_file_groups_correctly():

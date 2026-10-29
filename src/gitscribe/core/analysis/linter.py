@@ -22,6 +22,8 @@ class LintFinding(BaseModel):
     code: str
     message: str
     severity: str
+    col: int = 0
+    fixable: bool = False  # ruff reports an auto-fix for this finding
 
 
 _ERROR_PREFIXES = ("F", "E9", "S")
@@ -35,25 +37,33 @@ class RuffNotFoundError(RuntimeError):
     """Raised when the `ruff` binary isn't on PATH."""
 
 
-def run_ruff(repo_root: str = ".") -> list[LintFinding]:
+class RuffError(RuntimeError):
+    """ruff itself failed (bad config, crash) - distinct from 'found lint
+    errors'. Previously this was swallowed and reported as 'no findings'."""
+
+
+def _ruff(args: list[str]) -> subprocess.CompletedProcess:
     try:
-        result = subprocess.run(
-            ["ruff", "check", repo_root, "--output-format=json"],
-            capture_output=True,
-            text=True,
-        )
+        return subprocess.run(["ruff", *args], capture_output=True, text=True)
     except FileNotFoundError as e:
         raise RuffNotFoundError(
             "`ruff` not found on PATH. It's a project dependency - "
             "install it with `pip install ruff` or reinstall gitscribe."
         ) from e
+
+
+def run_ruff(repo_root: str = ".", paths: list[str] | None = None) -> list[LintFinding]:
+    targets = list(paths) if paths else [repo_root]
+    result = _ruff(["check", *targets, "--output-format=json"])
+    # ruff: 0 = clean, 1 = findings, 2 = ruff failed (config error, crash)
+    if result.returncode >= 2:
+        raise RuffError((result.stderr or result.stdout).strip() or f"ruff exited with {result.returncode}")
     if not result.stdout.strip():
         return []
-
     try:
         raw = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return []
+    except json.JSONDecodeError as e:
+        raise RuffError(f"could not parse ruff output: {e}") from e
 
     findings = []
     for item in raw:
@@ -62,12 +72,43 @@ def run_ruff(repo_root: str = ".") -> list[LintFinding]:
             LintFinding(
                 file=item["filename"],
                 lineno=item["location"]["row"],
+                col=item["location"].get("column", 0),
                 code=code,
                 message=item.get("message", ""),
                 severity=_severity_for(code),
+                fixable=item.get("fix") is not None,
             )
         )
     return findings
+
+
+def apply_fixes(repo_root: str = ".", paths: list[str] | None = None, unsafe: bool = False) -> None:
+    """`ruff check --fix` (safe fixes only unless `unsafe`)."""
+    args = ["check", *(paths or [repo_root]), "--fix", "--exit-zero", "--quiet"]
+    if unsafe:
+        args.append("--unsafe-fixes")
+    result = _ruff(args)
+    if result.returncode >= 2:
+        raise RuffError((result.stderr or result.stdout).strip() or "ruff --fix failed")
+
+
+def format_code(repo_root: str = ".", paths: list[str] | None = None, diff: bool = False) -> str:
+    """`ruff format`; with `diff`, only previews and changes nothing. Returns ruff's output."""
+    result = _ruff(["format", *(paths or [repo_root]), *(["--diff"] if diff else [])])
+    if result.returncode >= 2:
+        raise RuffError((result.stderr or result.stdout).strip() or "ruff format failed")
+    return result.stdout + (result.stderr if diff else "")
+
+
+def preview_fixes(repo_root: str = ".", paths: list[str] | None = None, unsafe: bool = False) -> str:
+    """`ruff check --diff`: what `--fix` would change, without changing it."""
+    args = ["check", *(paths or [repo_root]), "--diff", "--exit-zero"]
+    if unsafe:
+        args.append("--unsafe-fixes")
+    result = _ruff(args)
+    if result.returncode >= 2:
+        raise RuffError((result.stderr or result.stdout).strip() or "ruff --diff failed")
+    return result.stdout
 
 
 def findings_by_file(findings: list[LintFinding]) -> dict[str, list[LintFinding]]:
@@ -85,7 +126,6 @@ def severity_score(findings: list[LintFinding]) -> float:
         return 0.0
     errors = sum(1 for f in findings if f.severity == "error")
     return errors / len(findings)
-
 
 def _symbol_id_for(conn, file: str, lineno: int) -> int | None:
     """Line-range containment lookup — smallest enclosing symbol wins
@@ -119,14 +159,12 @@ def write_lint_findings(findings: list[LintFinding]) -> int:
     conn.commit()
     return len(findings)
 
-
 def run_lint_review(repo_root: str = ".") -> int:
     """Entry point for `gitscribe review --lint-only`:
     deterministic, no LLM call, runs regardless of Merkle skip state.
     """
     findings = run_ruff(repo_root)
     return write_lint_findings(findings)
-
 
 def _normalize_path(file: str) -> str:
     """ruff --output-format=json reports absolute paths; symbols.file is

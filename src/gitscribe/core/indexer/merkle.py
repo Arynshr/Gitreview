@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -53,10 +54,19 @@ def compute_root_hash(leaf_hashes: dict[str, str]) -> str:
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
 
-def diff_against_stored(conn: sqlite3.Connection, current: dict[str, str]) -> HashDiff:
-    """Compare current leaf hashes against the file_hashes table."""
+def diff_against_stored(
+    conn: sqlite3.Connection,
+    current: dict[str, str],
+    in_scope: Callable[[str], bool] | None = None,
+) -> HashDiff:
+    """Compare current leaf hashes against the file_hashes table.
+
+    `in_scope` restricts which *stored* files can count as removed: a scoped
+    reindex only sees a subset of the repo, so everything outside the scope
+    must be left alone rather than treated as deleted.
+    """
     rows = conn.execute("SELECT path, content_hash FROM file_hashes").fetchall()
-    stored = {r["path"]: r["content_hash"] for r in rows}
+    stored = {r["path"]: r["content_hash"] for r in rows if in_scope is None or in_scope(r["path"])}
 
     current_paths = set(current)
     stored_paths = set(stored)
@@ -69,7 +79,9 @@ def diff_against_stored(conn: sqlite3.Connection, current: dict[str, str]) -> Ha
 
 
 def get_last_root_hash(conn: sqlite3.Connection) -> str | None:
-    row = conn.execute("SELECT root_hash FROM index_runs ORDER BY id DESC LIMIT 1").fetchone()
+    row = conn.execute(
+        "SELECT root_hash FROM index_runs ORDER BY id DESC LIMIT 1"
+    ).fetchone()
     return row["root_hash"] if row else None
 
 
