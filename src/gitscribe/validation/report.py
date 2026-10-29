@@ -55,12 +55,8 @@ class LiveRenderer:
         kind, data = event.type, event.data
 
         if kind == "plan.ready":
-            self.rows = {
-                n: {"state": "queued", "findings": 0, "seconds": None} for n in data["jobs"]
-            }
-            self.live = Live(
-                self._render(), console=self.console, refresh_per_second=10, transient=True
-            )
+            self.rows = {n: {"state": "queued", "findings": 0, "seconds": None} for n in data["jobs"]}
+            self.live = Live(self._render(), console=self.console, refresh_per_second=10, transient=True)
             self.live.start()
             return
 
@@ -103,9 +99,7 @@ class LiveRenderer:
 
         counts = "  ".join(f"{n} {s}" for s, n in self._sorted_sev())
         footer = Text(f"findings so far: {counts}" if counts else "no findings yet", style="dim")
-        return Panel(
-            Group(table, footer), title="GitScribe verifying", border_style="cyan", expand=False
-        )
+        return Panel(Group(table, footer), title="GitScribe verifying", border_style="cyan", expand=False)
 
     def _sorted_sev(self):
         return [(s, self.sev[s]) for s in SEVERITIES if self.sev.get(s)]
@@ -114,10 +108,18 @@ class LiveRenderer:
 # ------------------------------------------------------------ summary view
 
 
-def render_summary(result: ValidationResult, console: Console, debug: bool = False) -> None:
+def render_summary(
+    result: ValidationResult, console: Console, debug: bool = False, scope_label: str = ""
+) -> None:
     findings = sort_findings(result.findings)
     reason = str(result.diagnostics.get("gate_reason") or "")
     ok = result.status == "PASS"
+    nothing_ran = not findings and not result.errors and not result.diagnostics.get("jobs")
+    if ok and nothing_ran:
+        reason = (
+            f"nothing to verify: no changes in {scope_label or 'the selected range'} "
+            "(use --staged or --working for uncommitted work)"
+        )
 
     counts = {s: sum(1 for f in findings if f.severity == s) for s in SEVERITIES}
     count_line = Text("  ".join(f"{n} {s}" for s, n in counts.items() if n) or "no findings")
@@ -127,20 +129,17 @@ def render_summary(result: ValidationResult, console: Console, debug: bool = Fal
     total = result.timings.get("total_s")
     if total is not None:
         banner.append(f"  ({total:.1f}s)", style="dim")
-    console.print(
-        Panel(
-            Group(banner, count_line),
-            title="GitScribe Verification",
-            border_style="green" if ok else "red",
-        )
-    )
+    console.print(Panel(Group(banner, count_line), title="GitScribe Verification",
+                        border_style="green" if ok else "red"))
 
     if findings:
         console.print(_heatmap(findings))
         console.print(_top_files(findings))
         _print_by_file(findings, console, debug)
 
-    console.print(_health(result))
+    health = _health(result)
+    if health.row_count:
+        console.print(health)
 
 
 def _heatmap(findings: list[Finding]) -> Table:
@@ -171,11 +170,8 @@ def _top_files(findings: list[Finding], limit: int = 5) -> Table:
 
 def _finding_lines(f: Finding, debug: bool) -> list[Text]:
     loc = f":{f.line}" if f.line else ""
-    head = Text.assemble(
-        (f"[{f.severity.upper()}] ", _STYLE[f.severity]),
-        f"{f.category}  ",
-        (f"({'/'.join(f.sources or [f.source])}{loc})", "dim"),
-    )
+    head = Text.assemble((f"[{f.severity.upper()}] ", _STYLE[f.severity]), f"{f.category}  ",
+                         (f"({'/'.join(f.sources or [f.source])}{loc})", "dim"))
     evidence = f.evidence if debug or len(f.evidence) <= 160 else f.evidence[:157] + "..."
     lines = [head, Text(f"  {f.message}")]
     if evidence:
@@ -200,30 +196,25 @@ def _health(result: ValidationResult) -> Table:
     health = result.diagnostics.get("scanner_health", {}) or {}
     jobs = set(result.diagnostics.get("jobs", []) or [])
     errors = {e.source: e.message for e in result.errors}
-    names = [
-        n
-        for n in dict.fromkeys([*jobs, *health, *errors])
-        if n in jobs or health.get(n) or n in errors
-    ]
+    names = list(dict.fromkeys([*jobs, *health, *errors]))
 
     table = Table(title="Scanner health", title_justify="left", header_style="bold")
     for col in ("scanner", "state", "findings", "time", "note"):
         table.add_column(col)
     for name in names:
         err = errors.get(name) or health.get(name)
-        state = Text(
-            "error" if name in errors else ("skipped" if err else "ok"),
-            style="red" if name in errors else ("yellow" if err else "green"),
-        )
+        if name in errors:
+            state = Text("error", style="red")
+        elif err:
+            state = Text("unavailable", style="yellow")
+        elif name in jobs:
+            state = Text("ok", style="green")
+        else:
+            state = Text("not needed", style="dim")
         count = sum(1 for f in result.findings if name in (f.sources or [f.source]))
         secs = result.timings.get(f"{name}_s")
-        table.add_row(
-            name,
-            state,
-            str(count) if name in jobs else "",
-            f"{secs:.1f}s" if secs else "",
-            (err or "")[:100],
-        )
+        table.add_row(name, state, str(count) if name in jobs else "", f"{secs:.1f}s" if secs else "",
+                      (err or "")[:100])
     other = [e for e in result.errors if e.source not in names]
     for e in other:
         table.add_row(e.source, Text("error", style="red"), "", "", e.message[:100])
@@ -276,13 +267,7 @@ def render_diff(result: ValidationResult, diff: str, console: Console, context: 
             hits = [i for i, (_, no, _) in enumerate(hunk) if no and (path, no) in by_loc]
             if not hits:
                 continue
-            keep = sorted(
-                {
-                    j
-                    for i in hits
-                    for j in range(max(0, i - context), min(len(hunk), i + context + 1))
-                }
-            )
+            keep = sorted({j for i in hits for j in range(max(0, i - context), min(len(hunk), i + context + 1))})
             console.print(Text(f"\n{path}", style="bold underline"))
             prev = None
             for i in keep:
@@ -293,12 +278,8 @@ def render_diff(result: ValidationResult, diff: str, console: Console, context: 
                 console.print(Text(f"{no if no else '':>5} {kind} {text}", style=style))
                 for f in by_loc.get((path, no), []) if no else []:
                     shown.add(id(f))
-                    console.print(
-                        Text(
-                            f"      ▲ [{f.severity.upper()}] {f.category}: {f.message}",
-                            style=_STYLE[f.severity],
-                        )
-                    )
+                    console.print(Text(f"      ▲ [{f.severity.upper()}] {f.category}: {f.message}",
+                                       style=_STYLE[f.severity]))
                     if f.remediation:
                         console.print(Text(f"        fix: {f.remediation}", style="green"))
                 prev = i
@@ -308,6 +289,4 @@ def render_diff(result: ValidationResult, diff: str, console: Console, context: 
         console.print(Text("\nNot on changed lines", style="bold"))
         for f in rest:
             loc = f"{f.file}:{f.line}" if f.file and f.line else (f.file or "(repository)")
-            console.print(
-                Text(f"  [{f.severity.upper()}] {loc} — {f.message}", style=_STYLE[f.severity])
-            )
+            console.print(Text(f"  [{f.severity.upper()}] {loc} — {f.message}", style=_STYLE[f.severity]))

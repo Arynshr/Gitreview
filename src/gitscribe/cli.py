@@ -35,14 +35,38 @@ from gitscribe.core.diff_parser import (
 from gitscribe.core.graph import build_graph
 from gitscribe.core.indexer import index_store
 from gitscribe.core.llm_client import MissingAPIKeyError
-from gitscribe.core.merge_preview import WorktreeError, run_merge_preview
 from gitscribe.core.progress import phase
+from gitscribe.core.merge_preview import WorktreeError, run_merge_preview
 from gitscribe.core.state import GitScribeState
 from gitscribe.core.summarizer import summarizer_node
 
 load_dotenv(find_dotenv(usecwd=True))
 
-app = typer.Typer(help="GitScribe: A stateful AI-powered Git and code intelligence system")
+app = typer.Typer(
+    help="GitScribe: A stateful AI-powered Git and code intelligence system",
+    no_args_is_help=True,
+    # default Typer tracebacks print local variables - build_chat_model's
+    # `api_key` would be printed in clear text on any crash
+    pretty_exceptions_show_locals=False,
+)
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        from importlib import metadata
+
+        try:
+            typer.echo(f"gitscribe {metadata.version('gitscribe')}")
+        except metadata.PackageNotFoundError:
+            typer.echo("gitscribe (development install)")
+        raise typer.Exit()
+
+
+@app.callback()
+def _main(
+    version: bool = typer.Option(False, "--version", callback=_version_callback, is_eager=True, help="Show version and exit"),
+) -> None:
+    pass
 
 ENV_PATH = Path(".env")
 repo_hooks_dir = Path(".git") / "hooks"
@@ -139,7 +163,9 @@ def require_api_key() -> None:
         raise typer.Exit(1)
 
 @app.command()
-def init():
+def init(
+    force: bool = typer.Option(False, "--force", help="Replace existing hooks (the old one is kept as <name>.bak)"),
+):
     """Install the pre-push, pre-merge-commit, post-merge, and commit-msg git hooks into .git/hooks/."""
     if not repo_hooks_dir.exists():
         console.error(".git/hooks not found - run this from a git repo root")
@@ -154,13 +180,15 @@ def init():
     installed = 0
     for hook_name in hook_names:
         dest = repo_hooks_dir / hook_name  # git requires the extensionless name here
-        if dest.exists():
-            console.warn(f"{dest} already exists - not overwriting. Remove it first if you want to reinstall.")
+        if dest.exists() and not force:
+            console.warn(f"{dest} already exists - not overwriting. Re-run with --force to replace it.")
             continue
         src = Path(__file__).parent / "hooks" / f"{hook_name}.sh"
         if not src.exists():
             console.error(f"hook source missing: {src}")
             raise typer.Exit(1)
+        if dest.exists() and dest.read_text() != src.read_text():
+            shutil.copy2(dest, dest.with_name(f"{hook_name}.bak"))
         dest.write_text(src.read_text())
         if os.name == "posix":
             dest.chmod(dest.stat().st_mode | stat.S_IEXEC)
@@ -228,7 +256,12 @@ def _ensure_api_key() -> None:
     lines = [ln for ln in existing.splitlines() if ln and not ln.startswith("API_KEY=")]
     lines.append(f"API_KEY={api_key}")
     ENV_PATH.write_text("\n".join(lines) + "\n")
+    if os.name == "posix":
+        ENV_PATH.chmod(0o600)  # secret: owner-only
     console.success(f"wrote API_KEY to {ENV_PATH.resolve()}")
+    # exit code 1 = inside a repo and NOT ignored (128 = not a repo: nothing to warn about)
+    if subprocess.run(["git", "check-ignore", "-q", str(ENV_PATH)], capture_output=True).returncode == 1:
+        console.warn(f"{ENV_PATH} is not in .gitignore - add it so the API key is never committed")
 
 
 _PATH_OPT = typer.Option(None, "--path", "-p", help="Limit to these files/folders (repeatable)")
@@ -528,8 +561,11 @@ def review_cmd(
     config = load_config()
     lint_count = 0
     if config.get("review", {}).get("lint", {}).get("enabled", True):
-        findings = linter_mod.run_ruff(".")
-        lint_count = linter_mod.write_lint_findings(findings)
+        try:
+            findings = linter_mod.run_ruff(".")
+            lint_count = linter_mod.write_lint_findings(findings)
+        except (linter_mod.RuffNotFoundError, linter_mod.RuffError) as e:
+            console.warn(f"lint pass skipped: {e}")
     agentic_count = 0
     if not lint_only and config.get("review", {}).get("agentic", {}).get("enabled", True):
         try:
@@ -563,6 +599,8 @@ def review_cmd(
         typer.echo(json.dumps({"lint_findings": lint_count, "agentic_findings": agentic_count}))
     else:
         console.success(f"review: {lint_count} lint finding(s), {agentic_count} agentic finding(s)")
+        if lint_count:
+            console.info("  details: gitscribe lint    (auto-repair: gitscribe lint --fix --format)")
 
 @app.command()
 def query(
@@ -570,6 +608,7 @@ def query(
     top_k: int = typer.Option(5, help="Number of matches"),
     json_output: bool = typer.Option(False, "--json", help="Raw retrieval context as JSON, no LLM call"),
     raw: bool = typer.Option(False, "--raw", help="Print raw retrieved context only, skip LLM synthesis"),
+    stream: str = _STREAM_OPT,
 ):
     """Ask a question about the indexed codebase.
 
@@ -580,7 +619,10 @@ def query(
     """
     config = load_config()
     try:
-        context = retrieve(text, config, top_k=top_k)
+        with ui.open_run("query", stream, machine=json_output or raw, subtitle=text[:60], to_stderr=True) as run:
+            with phase(run.emitter, "retrieve") as info:
+                context = retrieve(text, config, top_k=top_k)
+                info["symbols"] = len(context.snippets)
     except Exception as e:
         console.error(f"retrieval failed: {e}")
         raise typer.Exit(code=1) from e
@@ -602,7 +644,9 @@ def query(
 
     require_api_key()
     try:
-        answer = answer_query(text, context, config)
+        with ui.open_run("query", stream, subtitle="answer", to_stderr=True) as run:
+            with phase(run.emitter, "answer"):
+                answer = answer_query(text, context, config)
         typer.echo(answer)
         typer.echo("\n--- context used ---")
         typer.echo(context.as_prompt_block())
@@ -614,31 +658,72 @@ def query(
         typer.echo(context.as_prompt_block())
 
 
+def _print_lint(findings, paths_label: str) -> None:
+    if not findings:
+        console.success("no lint findings")
+        return
+    by_file = linter_mod.findings_by_file(findings)
+    for file, items in by_file.items():
+        console.line(f"\n{file}", severity="info")
+        for f in sorted(items, key=lambda x: (x.lineno, x.col)):
+            mark = "  [fixable]" if f.fixable else ""
+            console.line(
+                f"  {f.lineno}:{f.col:<4} {f.severity:7} {f.code:7} {f.message}{mark}", severity=f.severity
+            )
+    errors = sum(1 for f in findings if f.severity == "error")
+    fixable = sum(1 for f in findings if f.fixable)
+    console.info(
+        f"\n{len(findings)} finding(s): {errors} error(s), {len(findings) - errors} warning(s); "
+        f"severity score {linter_mod.severity_score(findings):.2f}"
+    )
+    if fixable:
+        console.info(f"{fixable} auto-fixable -> gitscribe lint --fix{paths_label}   (preview first: --diff)")
+
+
 @app.command()
 def lint(
     repo_root: str = typer.Option(".", help="Repo root to lint"),
+    path: list[str] | None = _PATH_OPT,
     json_output: bool = typer.Option(False, "--json"),
     fails_on_error: bool = typer.Option(True, help="Exit 1 if any error-severity finding exists"),
+    fix: bool = typer.Option(False, "--fix", help="Apply ruff's safe auto-fixes, then re-lint"),
+    unsafe_fixes: bool = typer.Option(False, "--unsafe-fixes", help="With --fix: also apply fixes ruff marks unsafe"),
+    format_code: bool = typer.Option(False, "--format", help="Also run `ruff format`"),
+    diff: bool = typer.Option(False, "--diff", help="Preview what --fix/--format would change; modify nothing"),
 ):
+    """List ruff findings (file, line, rule, message); `--fix` / `--format` repair them."""
+    paths = _existing_paths(path)
+    label = f" --path {' --path '.join(paths)}" if paths else ""
     try:
-        findings = linter_mod.run_ruff(repo_root)
+        if diff:
+            out = linter_mod.preview_fixes(repo_root, paths, unsafe_fixes)
+            if format_code:
+                out += linter_mod.format_code(repo_root, paths, diff=True)
+            console.info(out.strip() or "nothing to change")
+            return
+
+        before = linter_mod.run_ruff(repo_root, paths)
+        if fix or format_code:
+            if fix:
+                linter_mod.apply_fixes(repo_root, paths, unsafe_fixes)
+            if format_code:
+                linter_mod.format_code(repo_root, paths)
+        findings = linter_mod.run_ruff(repo_root, paths) if (fix or format_code) else before
     except linter_mod.RuffNotFoundError as e:
         console.error(str(e))
         raise typer.Exit(1) from e
+    except linter_mod.RuffError as e:
+        console.error(f"ruff failed: {e}")
+        raise typer.Exit(2) from e
 
     if json_output:
         typer.echo(json.dumps([f.model_dump() for f in findings], indent=2))
     else:
-        if not findings:
-            console.success("no findings")
-        for f in findings:
-            location = f"{f.file}:{f.lineno}"
-            console.line(f"{f.severity:8} {location:50} {f.code:6} {f.message}", severity=f.severity)
-        if findings:
-            typer.echo(f"\n{len(findings)} findings, severity score {linter_mod.severity_score(findings):.2f}")
+        if fix or format_code:
+            console.success(f"fixed {max(len(before) - len(findings), 0)} of {len(before)} finding(s); {len(findings)} remain")
+        _print_lint(findings, label)
 
-    has_errors = any(f.severity == "error" for f in findings)
-    if fails_on_error and has_errors:
+    if fails_on_error and any(f.severity == "error" for f in findings):
         raise typer.Exit(code=1)
 
 
@@ -683,8 +768,10 @@ def graph(
 ):
     """Blast radius / dependency view for a named symbol."""
     conn = index_store._get_connection()
-    symbol_id, matched_name = _find_symbol(conn, symbol)
-    conn.close()
+    try:
+        symbol_id, matched_name = _find_symbol(conn, symbol)
+    finally:
+        conn.close()
     results = index_store.blast_radius(symbol_id, max_depth=depth)
 
     if json_output:
@@ -806,35 +893,44 @@ def commit(
 def pre_push_cmd():
     cfg = load_config()
     hard_block = cfg.get("hooks", {}).get("pre_push", {}).get("block_on_risk", False)
-    result = hook_utils.get_cached_risk(cfg, base="origin/main", head="HEAD")
+    try:
+        result = hook_utils.get_cached_risk(cfg, base="origin/main", head="HEAD")
+    except Exception as e:  # noqa: BLE001 - a hook must never block git because of its own failure
+        console.warn(f"pre-push risk check skipped ({e})")
+        result = None
     threshold = cfg["risk_classifier"]["trivial_threshold"] * 3
 
-    if result["risk_score"] >= threshold:
-        print(f"⚠ high-risk diff ({result['risk_score']:.2f}): {result['risk_reasoning']}")
+    if result and result["risk_score"] >= threshold:
+        console.warn(f"high-risk diff ({result['risk_score']:.2f}): {result['risk_reasoning']}")
         if hard_block:
-            print("blocked — override with: git push --no-verify")
+            console.error("blocked — override with: git push --no-verify")
             raise typer.Exit(code=1)
 
     no_upstream = subprocess.run(
         ["git", "rev-parse", "-q", "--verify", "@{u}"], capture_output=True
     ).returncode != 0
     if no_upstream:
-        subprocess.run(["gitscribe", "create-pr"])
+        if shutil.which("gitscribe"):
+            subprocess.run(["gitscribe", "create-pr"])
 
 
 @app.command(name="merge-check")
 def merge_check_cmd():
     cfg = load_config()
     hard_block = cfg.get("hooks", {}).get("merge_check", {}).get("block_on_risk", False)
-    result = hook_utils.get_cached_risk(cfg, base="HEAD", head="MERGE_HEAD")
+    try:
+        result = hook_utils.get_cached_risk(cfg, base="HEAD", head="MERGE_HEAD")
+    except Exception as e:  # noqa: BLE001 - fail open, same reasoning as pre-push
+        console.warn(f"merge-check skipped ({e})")
+        return
     threshold = cfg["risk_classifier"]["trivial_threshold"] * 4
 
     if result["risk_score"] >= threshold:
-        print(f"⚠ merge risk ({result['risk_score']:.2f}): {result['risk_reasoning']}")
+        console.warn(f"merge risk ({result['risk_score']:.2f}): {result['risk_reasoning']}")
         if hard_block:
-            print("blocked — override with: git merge --no-verify")
+            console.error("blocked — override with: git merge --no-verify")
             raise typer.Exit(code=1)
-    print(f"✓ merge-check passed (risk {result['risk_score']:.2f})")
+    console.success(f"merge-check passed (risk {result['risk_score']:.2f})")
 
 
 @app.command(name="post-merge")
@@ -845,8 +941,12 @@ def post_merge_cmd(ff: str = typer.Option("0")):
     if not Path(".git/MERGE_MSG").exists() and ff == "1":
         return  # fast-forward, nothing merged to record
 
-    diff = get_raw_diff(base="HEAD@{1}", head="HEAD")
-    commits = get_commit_messages(base="HEAD@{1}", head="HEAD")
+    try:
+        diff = get_raw_diff(base="HEAD@{1}", head="HEAD")
+        commits = get_commit_messages(base="HEAD@{1}", head="HEAD")
+    except GitCommandError as e:  # no reflog entry (fresh clone / expired) - nothing to record
+        console.warn(f"post-merge: could not read the merge range, skipping memory update ({e})")
+        return
     state = GitScribeState(branch_name=branch, raw_diff=diff, commit_messages=commits)
 
     files = diff_parser_node(state, cfg)
@@ -888,11 +988,11 @@ def commit_msg_cmd(msg_file: str = typer.Argument(...)):
 def merge_conflict_cmd():
     files = hook_utils.conflicted_files()
     if not files:
-        print("No conflicts detected.")
+        console.success("no conflicts detected")
         return
-    print(f"gitscribe: {len(files)} file(s) with conflicts:")
+    console.warn(f"{len(files)} file(s) with conflicts:")
     for f in files:
-        print(f"  - {f}")
+        console.line(f"  - {f}", severity="warning")
 
 
 @app.command(name="merge-preview")
@@ -910,11 +1010,10 @@ def merge_preview_cmd(
     """
     cfg = load_config()
     require_api_key()
-    ours = current_branch()
-
     try:
+        ours = current_branch()
         report = run_merge_preview(cfg, ours_branch=ours, theirs_branch=branch, base_ref=base)
-    except (WorktreeError, MissingAPIKeyError) as e:
+    except (WorktreeError, MissingAPIKeyError, GitCommandError) as e:
         console.error(str(e))
         raise typer.Exit(1) from e
 
